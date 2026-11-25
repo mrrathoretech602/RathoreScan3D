@@ -585,6 +585,37 @@
     z-index: 5;
   }
 
+  .vp-toolbar {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 6;
+  }
+
+  .vp-toolbar button {
+    pointer-events: auto;
+    background: rgba(13, 18, 28, 0.86);
+    backdrop-filter: blur(8px);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 11px;
+    border-radius: 8px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .vp-toolbar button.active {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
   .scan-item {
     display: flex;
     justify-content: space-between;
@@ -854,7 +885,13 @@
   <section id="tab-build" class="tab">
     <div class="tab-inner">
       <div class="card">
-        <h3>Live C++17 Photogrammetry Pipeline</h3>
+        <div class="row" style="justify-content:space-between;">
+          <h3>Live C++17 Photogrammetry Pipeline</h3>
+          <div class="row" style="gap:8px;">
+            <span id="buildTimer" style="font-size:0.8rem; color:var(--muted); font-family:Consolas, monospace;">00:00</span>
+            <button class="btn danger sm" id="btnCancelBuild" disabled>Cancel Build</button>
+          </div>
+        </div>
         <div class="row" style="justify-content:space-between;">
           <span id="stageLabel" style="font-weight:700; font-size:0.9rem;">Waiting for job...</span>
           <span id="pctLabel" style="color:var(--accent); font-weight:800;">0%</span>
@@ -869,12 +906,18 @@
   <section id="tab-studio" class="tab">
     <div id="viewport">
       <div class="stats-pill" id="meshStats">No Model Loaded</div>
+      <div class="vp-toolbar">
+        <button type="button" id="btnFitCamera">Fit View</button>
+        <button type="button" id="btnTurntable">Turntable: Off</button>
+        <button type="button" id="btnToggleGrid" class="active">Grid: On</button>
+        <button type="button" id="btnCycleBg">BG: Dark</button>
+      </div>
     </div>
     <aside id="studioSidebar">
       <div class="row studio-full" style="justify-content:space-between;">
         <h3 style="color:var(--accent); font-size:0.9rem;">3D Studio Inspector</h3>
         <div class="row" style="gap:6px;">
-          <input type="file" id="localObjInput" accept=".obj" style="display:none" />
+          <input type="file" id="localObjInput" accept=".obj,.mtl,.jpg,.jpeg,.png" multiple style="display:none" />
           <button class="btn sec sm" onclick="document.getElementById('localObjInput').click()">Open .OBJ</button>
           <button class="btn sec sm" id="btnLoadDemo">Test Mesh</button>
         </div>
@@ -886,14 +929,21 @@
           <button class="btn sec sm" style="flex:1;" onclick="setShading('textured')">Textured</button>
           <button class="btn sec sm" style="flex:1;" onclick="setShading('clay')">Clay</button>
           <button class="btn sec sm" style="flex:1;" onclick="setShading('wire')">Wire</button>
+          <button class="btn sec sm" style="flex:1;" onclick="setShading('normal')">Normals</button>
         </div>
       </div>
 
       <div class="studio-section">
-        <label>Quick Orientation &amp; Pivot Fix</label>
+        <label>Studio Exposure (<span id="expVal">1.10</span>)</label>
+        <input type="range" id="exposureSlider" min="0.5" max="2.5" step="0.05" value="1.1" />
+      </div>
+
+      <div class="studio-section">
+        <label>Orientation, Scale &amp; Pivot</label>
         <div class="row">
           <button class="btn sec sm" style="flex:1;" id="btnFixAxis">Flip Y-Up</button>
           <button class="btn sec sm" style="flex:1;" id="btnGroundPivot">Ground Pivot</button>
+          <button class="btn sec sm" style="flex:1;" id="btnNormalizeScale">Fit 1.5m</button>
         </div>
       </div>
 
@@ -922,12 +972,15 @@
       </div>
 
       <div class="studio-section studio-divider">
-        <label style="color:var(--warn); font-weight:700;">Floor &amp; Background Cropper</label>
+        <label style="color:var(--warn); font-weight:700;">Live Visual Floor &amp; Radius Cropper</label>
         <label>Cut Floor Height Y (<span id="cropYVal">-5.0</span>)</label>
         <input type="range" id="cropY" min="-5" max="5" step="0.05" value="-5" />
         <label>Trim Outer Radius (<span id="cropRVal">20.0</span>)</label>
         <input type="range" id="cropR" min="0.5" max="20" step="0.1" value="20" />
-        <button class="btn sec sm" style="width:100%;" id="btnApplyCrop">Apply Crop &amp; Clean Mesh</button>
+        <div class="row">
+          <button class="btn sec sm" style="flex:1;" id="btnApplyCrop">Apply Crop</button>
+          <button class="btn sec sm" style="flex:1;" id="btnResetMesh">Reset Original</button>
+        </div>
       </div>
 
       <div class="studio-section studio-divider studio-full">
@@ -1226,7 +1279,46 @@ document.getElementById('btnClearInputs').onclick = () => {
   refreshSelectionSummary();
 };
 
-// --- UPLOAD WITH REAL PROGRESS & LIVE SSE STREAM ---
+// --- UPLOAD WITH REAL PROGRESS, TIMER, CANCEL & LIVE SSE STREAM ---
+let activeJobId = null;
+let activeXhr = null;
+let activeEs = null;
+let buildTimerHandle = null;
+const btnCancelBuild = document.getElementById('btnCancelBuild');
+const buildTimerEl = document.getElementById('buildTimer');
+
+function startBuildTimer() {
+  clearInterval(buildTimerHandle);
+  const start = Date.now();
+  buildTimerEl.textContent = '00:00';
+  buildTimerHandle = setInterval(() => {
+    const sec = Math.floor((Date.now() - start) / 1000);
+    const m = String(Math.floor(sec / 60)).padStart(2, '0');
+    const s = String(sec % 60).padStart(2, '0');
+    buildTimerEl.textContent = `${m}:${s}`;
+  }, 1000);
+}
+
+function stopBuildState() {
+  clearInterval(buildTimerHandle);
+  buildDot.classList.remove('live');
+  btnCancelBuild.disabled = true;
+  activeJobId = null;
+  activeXhr = null;
+}
+
+btnCancelBuild.onclick = async () => {
+  if (activeXhr) {
+    activeXhr.abort();
+    document.getElementById('consoleLog').textContent += '[WARN] Upload aborted by user.\n';
+    stopBuildState();
+    return;
+  }
+  if (activeJobId) {
+    await fetch(apiUrl('/api/jobs/cancel?job=' + encodeURIComponent(activeJobId)), { method: 'POST' }).catch(() => {});
+  }
+};
+
 btnBuild3D.onclick = () => {
   if (!selectedBlob && selectedPhotos.length < 3) return;
   const fd = new FormData();
@@ -1237,6 +1329,8 @@ btnBuild3D.onclick = () => {
 
   switchTab('build');
   buildDot.classList.add('live');
+  btnCancelBuild.disabled = false;
+  startBuildTimer();
   const logEl = document.getElementById('consoleLog');
   const stageEl = document.getElementById('stageLabel');
   const pctEl = document.getElementById('pctLabel');
@@ -1244,6 +1338,7 @@ btnBuild3D.onclick = () => {
   logEl.textContent = `Uploading ${selectedBlob ? 'video' : ''}${selectedBlob && selectedPhotos.length ? ' + ' : ''}${selectedPhotos.length ? selectedPhotos.length + ' photos' : ''} to Laptop Engine...\n`;
 
   const xhr = new XMLHttpRequest();
+  activeXhr = xhr;
   xhr.open('POST', apiUrl('/api/upload'), true);
   xhr.upload.onprogress = ev => {
     if (!ev.lengthComputable) return;
@@ -1253,24 +1348,22 @@ btnBuild3D.onclick = () => {
     fillEl.style.width = `${upPct}%`;
   };
   xhr.onerror = () => {
-    buildDot.classList.remove('live');
+    stopBuildState();
     logEl.textContent += '[ERROR] Local PC server is not running. Close this window and click the RathoreScan 3D Studio Desktop icon to start the background server.\n';
   };
   xhr.onload = () => {
-    if (xhr.status === 404 || xhr.status === 405) {
-      buildDot.classList.remove('live');
-      logEl.textContent += '[ERROR] Local PC upload endpoint not available.\n';
-      return;
-    }
+    activeXhr = null;
     if (xhr.status < 200 || xhr.status >= 300) {
-      buildDot.classList.remove('live');
-      logEl.textContent += `[ERROR] ${xhr.responseText}\n`;
+      stopBuildState();
+      logEl.textContent += `[ERROR] ${xhr.responseText || 'Upload failed'}\n`;
       return;
     }
     const data = JSON.parse(xhr.responseText);
+    activeJobId = data.job_id;
     logEl.textContent += `[OK] Upload complete! Job ID: ${data.job_id} (${data.mode})\n`;
 
     const es = new EventSource(apiUrl('/api/events?job=' + data.job_id));
+    activeEs = es;
     es.onmessage = ev => {
       const d = JSON.parse(ev.data);
       fillEl.style.width = d.percent + '%';
@@ -1281,13 +1374,13 @@ btnBuild3D.onclick = () => {
 
       if (d.status === 'done') {
         es.close();
-        buildDot.classList.remove('live');
+        stopBuildState();
         loadHistory();
         loadOBJModel(apiUrl(d.model_url), apiUrl(d.mtl_url));
         switchTab('studio');
       } else if (d.status === 'error') {
         es.close();
-        buildDot.classList.remove('live');
+        stopBuildState();
       }
     };
   };
@@ -1297,18 +1390,30 @@ btnBuild3D.onclick = () => {
 async function loadHistory() {
   const el = document.getElementById('scanHistory');
   try {
-    const res = await fetch(apiUrl('/api/jobs'), { mode: 'cors' });
-    if (!res.ok) throw new Error('preview');
+    const res = await fetch(apiUrl('/api/jobs'), { cache: 'no-store' });
+    if (!res.ok) throw new Error('offline');
     const items = await res.json() || [];
     el.innerHTML = items.length ? '' : '<span style="font-size:0.78rem;color:var(--muted)">No previous scans yet.</span>';
     items.reverse().forEach(it => {
       const div = document.createElement('div');
       div.className = 'scan-item';
-      div.innerHTML = `<span>${it.id}</span>
-        <button class="btn sec sm" style="flex-shrink:0;">Open 3D</button>`;
-      div.querySelector('button').onclick = () => {
+      const meta = [it.created_at, it.size_kb ? `${it.size_kb} KB` : ''].filter(Boolean).join(' · ');
+      div.innerHTML = `<div style="min-width:0; flex:1;">
+          <div style="font-size:0.82rem; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${it.id}</div>
+          <div style="font-size:0.7rem; color:var(--muted);">${meta}</div>
+        </div>
+        <div class="row" style="gap:6px; flex-shrink:0;">
+          <button class="btn sec sm open-btn">Open 3D</button>
+          <button class="btn danger sm del-btn" title="Delete scan">✕</button>
+        </div>`;
+      div.querySelector('.open-btn').onclick = () => {
         loadOBJModel(apiUrl(it.model_url), apiUrl(it.mtl_url));
         switchTab('studio');
+      };
+      div.querySelector('.del-btn').onclick = async () => {
+        if (!confirm(`Delete ${it.id} from disk?`)) return;
+        await fetch(apiUrl('/api/jobs/delete?job=' + encodeURIComponent(it.id)), { method: 'POST' });
+        loadHistory();
       };
       el.appendChild(div);
     });
@@ -1318,25 +1423,47 @@ async function loadHistory() {
 }
 loadHistory();
 
-// --- THREE.JS 3D STUDIO ---
+// --- THREE.JS PRO 3D STUDIO ---
 const container = document.getElementById('viewport');
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 500);
-camera.position.set(2.8, 2.2, 3.2);
+const camera = new THREE.PerspectiveCamera(48, 1, 0.02, 500);
+camera.position.set(2.6, 2.0, 3.0);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
 container.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+controls.autoRotateSpeed = 2.0;
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.95));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x22304a, 0.85));
 const dir1 = new THREE.DirectionalLight(0xffffff, 1.4); dir1.position.set(5, 8, 5); scene.add(dir1);
-const dir2 = new THREE.DirectionalLight(0x80d8ff, 0.6); dir2.position.set(-5, 3, -5); scene.add(dir2);
-scene.add(new THREE.GridHelper(10, 20, 0x00e5ff, 0x1e2738));
-scene.add(new THREE.AxesHelper(1.5));
+const dir2 = new THREE.DirectionalLight(0x80d8ff, 0.65); dir2.position.set(-5, 3, -5); scene.add(dir2);
+const rimLight = new THREE.DirectionalLight(0x7c4dff, 0.45); rimLight.position.set(0, 4, -6); scene.add(rimLight);
+
+const studioGrid = new THREE.GridHelper(10, 20, 0x00e5ff, 0x1e2738);
+const studioAxes = new THREE.AxesHelper(1.2);
+scene.add(studioGrid, studioAxes);
+
+// Live Visual Cropper Gizmo (Floor Plane + Outer Cylinder)
+const cropGizmo = new THREE.Group();
+const cropPlane = new THREE.Mesh(
+  new THREE.CircleGeometry(20, 48),
+  new THREE.MeshBasicMaterial({ color: 0xffb300, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false })
+);
+cropPlane.rotation.x = -Math.PI / 2;
+const cropCyl = new THREE.Mesh(
+  new THREE.CylinderGeometry(20, 20, 10, 48, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.08, side: THREE.DoubleSide, wireframe: true, depthWrite: false })
+);
+cropCyl.position.y = 5;
+cropGizmo.add(cropPlane, cropCyl);
+cropGizmo.visible = false;
+scene.add(cropGizmo);
 
 let modelRoot = new THREE.Group();
 scene.add(modelRoot);
@@ -1362,6 +1489,22 @@ function animate() {
 }
 animate();
 
+function fitCameraToModel() {
+  modelRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z, 0.2);
+  const dist = maxDim * 1.9;
+  controls.target.copy(center);
+  camera.position.set(center.x + dist * 0.72, center.y + dist * 0.55, center.z + dist * 0.85);
+  camera.near = Math.max(0.01, maxDim * 0.005);
+  camera.far = Math.max(200, maxDim * 50);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
 function registerModel(obj) {
   modelRoot.clear();
   originalGeometries.clear();
@@ -1369,6 +1512,12 @@ function registerModel(obj) {
   modelRoot.position.set(0, 0, 0);
   modelRoot.rotation.set(0, 0, 0);
   modelRoot.scale.set(1, 1, 1);
+  ['rotX', 'rotY', 'rotZ'].forEach(id => { document.getElementById(id).value = 0; });
+  document.getElementById('scaleSlider').value = 1;
+  document.getElementById('rotVal').textContent = '0°, 0°, 0°';
+  document.getElementById('scaleVal').textContent = '1.00x';
+  document.getElementById('polyKeepSlider').value = 100;
+  document.getElementById('polyKeepVal').textContent = '100%';
 
   obj.traverse(c => {
     if (c.isMesh) {
@@ -1378,8 +1527,39 @@ function registerModel(obj) {
   });
   modelRoot.add(obj);
   groundPivot();
+  fitCameraToModel();
   updateStats();
 }
+
+// Viewport Toolbar Controls
+document.getElementById('btnFitCamera').onclick = fitCameraToModel;
+document.getElementById('btnTurntable').onclick = e => {
+  controls.autoRotate = !controls.autoRotate;
+  e.target.textContent = `Turntable: ${controls.autoRotate ? 'On' : 'Off'}`;
+  e.target.classList.toggle('active', controls.autoRotate);
+};
+document.getElementById('btnToggleGrid').onclick = e => {
+  studioGrid.visible = !studioGrid.visible;
+  studioAxes.visible = studioGrid.visible;
+  e.target.textContent = `Grid: ${studioGrid.visible ? 'On' : 'Off'}`;
+  e.target.classList.toggle('active', studioGrid.visible);
+};
+const bgThemes = [
+  { name: 'Dark', css: 'radial-gradient(circle at center, #1b2436 0%, #090c12 100%)' },
+  { name: 'Gray', css: 'radial-gradient(circle at center, #3b4252 0%, #1c2029 100%)' },
+  { name: 'Light', css: 'radial-gradient(circle at center, #eef2f7 0%, #cfd8e3 100%)' }
+];
+let bgIdx = 0;
+document.getElementById('btnCycleBg').onclick = e => {
+  bgIdx = (bgIdx + 1) % bgThemes.length;
+  container.style.background = bgThemes[bgIdx].css;
+  e.target.textContent = `BG: ${bgThemes[bgIdx].name}`;
+};
+document.getElementById('exposureSlider').oninput = e => {
+  const v = parseFloat(e.target.value);
+  renderer.toneMappingExposure = v;
+  document.getElementById('expVal').textContent = v.toFixed(2);
+};
 
 function updateStats() {
   let tris = 0, verts = 0, bytes = 0;
@@ -1418,12 +1598,29 @@ function loadOBJModel(objUrl, mtlUrl) {
   });
 }
 
-// Local .OBJ opener (works even offline/Vercel without PC engine)
+// Local .OBJ (+ optional .MTL & texture) opener
 document.getElementById('localObjInput').onchange = async e => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const text = await f.text();
-  const obj = new OBJLoader().parse(text);
+  const files = Array.from(e.target.files || []);
+  const objFile = files.find(f => /\.obj$/i.test(f.name));
+  if (!objFile) return;
+  const mtlFile = files.find(f => /\.mtl$/i.test(f.name));
+  const texFiles = files.filter(f => /\.(jpg|jpeg|png)$/i.test(f.name));
+  const objText = await objFile.text();
+  let obj;
+  if (mtlFile) {
+    let mtlText = await mtlFile.text();
+    const blobUrls = [];
+    for (const tf of texFiles) {
+      const u = URL.createObjectURL(tf);
+      blobUrls.push(u);
+      mtlText = mtlText.split(tf.name).join(u);
+    }
+    const mats = new MTLLoader().parse(mtlText, '');
+    mats.preload();
+    obj = new OBJLoader().setMaterials(mats).parse(objText);
+  } else {
+    obj = new OBJLoader().parse(objText);
+  }
   obj.traverse(c => {
     if (c.isMesh && !c.material) {
       c.material = new THREE.MeshStandardMaterial({ color: 0xb0bec5, roughness: 0.55 });
@@ -1448,15 +1645,17 @@ document.getElementById('btnLoadDemo').onclick = () => {
 window.setShading = mode => {
   const clayMat = new THREE.MeshStandardMaterial({ color: 0xcfd8dc, roughness: 0.65 });
   const wireMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, wireframe: true });
+  const normMat = new THREE.MeshNormalMaterial();
   modelRoot.traverse(c => {
     if (!c.isMesh) return;
     if (mode === 'textured') c.material = originalMaterials.get(c.uuid);
     else if (mode === 'clay') c.material = clayMat;
     else if (mode === 'wire') c.material = wireMat;
+    else if (mode === 'normal') c.material = normMat;
   });
 };
 
-// Orientation & Ground Pivot
+// Orientation, Normalize 1.5m & Ground Pivot
 function groundPivot() {
   modelRoot.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(modelRoot);
@@ -1474,6 +1673,20 @@ document.getElementById('btnFixAxis').onclick = () => {
   groundPivot();
 };
 document.getElementById('btnGroundPivot').onclick = groundPivot;
+document.getElementById('btnNormalizeScale').onclick = () => {
+  modelRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  if (box.isEmpty()) return;
+  const maxDim = Math.max(...box.getSize(new THREE.Vector3()).toArray());
+  if (maxDim <= 0) return;
+  const newScale = (1.5 / maxDim) * modelRoot.scale.x;
+  const clamped = Math.max(0.1, Math.min(5, newScale));
+  document.getElementById('scaleSlider').value = clamped;
+  modelRoot.scale.setScalar(newScale);
+  document.getElementById('scaleVal').textContent = `${newScale.toFixed(2)}x`;
+  groundPivot();
+  fitCameraToModel();
+};
 
 function applyTransforms() {
   const rx = parseFloat(document.getElementById('rotX').value);
@@ -1529,9 +1742,37 @@ document.getElementById('btnOptimizePoly').onclick = () => {
   updateStats();
 };
 
-// Floor & Background Cropper
-document.getElementById('cropY').oninput = e => document.getElementById('cropYVal').textContent = e.target.value;
-document.getElementById('cropR').oninput = e => document.getElementById('cropRVal').textContent = e.target.value;
+// Live Visual Floor & Background Cropper
+function updateCropGizmo() {
+  const minY = parseFloat(document.getElementById('cropY').value);
+  const maxR = parseFloat(document.getElementById('cropR').value);
+  document.getElementById('cropYVal').textContent = minY.toFixed(2);
+  document.getElementById('cropRVal').textContent = maxR.toFixed(1);
+  cropGizmo.visible = minY > -4.95 || maxR < 19.9;
+  const s = maxR / 20;
+  cropPlane.scale.set(s, s, 1);
+  cropPlane.position.y = minY;
+  cropCyl.scale.set(s, 1, s);
+  cropCyl.position.y = minY + 5;
+}
+document.getElementById('cropY').oninput = updateCropGizmo;
+document.getElementById('cropR').oninput = updateCropGizmo;
+
+document.getElementById('btnResetMesh').onclick = () => {
+  modelRoot.traverse(c => {
+    if (!c.isMesh) return;
+    const base = originalGeometries.get(c.uuid);
+    if (!base) return;
+    c.geometry.dispose();
+    c.geometry = base.clone();
+  });
+  document.getElementById('cropY').value = -5;
+  document.getElementById('cropR').value = 20;
+  updateCropGizmo();
+  groundPivot();
+  fitCameraToModel();
+  updateStats();
+};
 
 document.getElementById('btnApplyCrop').onclick = () => {
   const minY = parseFloat(document.getElementById('cropY').value);
@@ -1568,10 +1809,12 @@ document.getElementById('btnApplyCrop').onclick = () => {
     const clean = new THREE.BufferGeometry();
     clean.setAttribute('position', new THREE.Float32BufferAttribute(newPos, 3));
     if (newNorm.length) clean.setAttribute('normal', new THREE.Float32BufferAttribute(newNorm, 3));
+    else clean.computeVertexNormals();
     if (newUv.length) clean.setAttribute('uv', new THREE.Float32BufferAttribute(newUv, 2));
     c.geometry.dispose();
     c.geometry = clean;
   });
+  cropGizmo.visible = false;
   groundPivot();
   updateStats();
 };

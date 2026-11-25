@@ -37,13 +37,16 @@ type JobState struct {
 	ModelURL    string
 	MtlURL      string
 	Subscribers map[chan JobEvent]bool
+	Cmd         *exec.Cmd
+	Canceled    bool
 	mu          sync.Mutex
 }
 
 var (
-	jobs   = make(map[string]*JobState)
-	jobsMu sync.RWMutex
-	progRe = regexp.MustCompile(`\[PROGRESS:(\d+)\]\s*(.*)`)
+	jobs      = make(map[string]*JobState)
+	jobsMu    sync.RWMutex
+	progRe    = regexp.MustCompile(`\[PROGRESS:(\d+)\]\s*(.*)`)
+	validJob  = regexp.MustCompile(`^scan_[0-9]+$`)
 )
 
 func (j *JobState) emit(ev JobEvent) {
@@ -274,6 +277,9 @@ func runPipeline(st *JobState, jobDir, mode, videoArg, preset, fps string, photo
 		st.emit(JobEvent{Percent: 0, Message: "Failed to start C++ engine: " + err.Error(), Status: "error"})
 		return
 	}
+	st.mu.Lock()
+	st.Cmd = cmd
+	st.mu.Unlock()
 
 	scanner := bufio.NewScanner(stdout)
 	lastPct := 5
@@ -291,7 +297,14 @@ func runPipeline(st *JobState, jobDir, mode, videoArg, preset, fps string, photo
 	}
 
 	if err := cmd.Wait(); err != nil {
-		st.emit(JobEvent{Percent: lastPct, Message: "Pipeline exited with error: " + err.Error(), Status: "error"})
+		st.mu.Lock()
+		canceled := st.Canceled
+		st.mu.Unlock()
+		if canceled {
+			st.emit(JobEvent{Percent: lastPct, Message: "Build canceled by user.", Status: "error"})
+		} else {
+			st.emit(JobEvent{Percent: lastPct, Message: "Pipeline exited with error: " + err.Error(), Status: "error"})
+		}
 		return
 	}
 
@@ -359,26 +372,88 @@ func handleEvents(w http.ResponseWriter, r *http.Request) {
 
 func handleListJobs(w http.ResponseWriter, r *http.Request) {
 	type ScanItem struct {
-		ID       string `json:"id"`
-		ModelURL string `json:"model_url"`
-		MtlURL   string `json:"mtl_url"`
+		ID        string `json:"id"`
+		ModelURL  string `json:"model_url"`
+		MtlURL    string `json:"mtl_url"`
+		SizeKB    int64  `json:"size_kb"`
+		CreatedAt string `json:"created_at"`
 	}
 	var list []ScanItem
 	entries, _ := os.ReadDir("jobs")
 	for _, e := range entries {
 		if e.IsDir() {
 			objPath := filepath.Join("jobs", e.Name(), "output", "model.obj")
-			if _, err := os.Stat(objPath); err == nil {
+			if info, err := os.Stat(objPath); err == nil {
+				var totalBytes int64
+				_ = filepath.Walk(filepath.Join("jobs", e.Name(), "output"), func(_ string, fi os.FileInfo, walkErr error) error {
+					if walkErr == nil && fi != nil && !fi.IsDir() {
+						totalBytes += fi.Size()
+					}
+					return nil
+				})
 				list = append(list, ScanItem{
-					ID:       e.Name(),
-					ModelURL: "/jobs/" + e.Name() + "/output/model.obj",
-					MtlURL:   "/jobs/" + e.Name() + "/output/model.mtl",
+					ID:        e.Name(),
+					ModelURL:  "/jobs/" + e.Name() + "/output/model.obj",
+					MtlURL:    "/jobs/" + e.Name() + "/output/model.mtl",
+					SizeKB:    totalBytes / 1024,
+					CreatedAt: info.ModTime().Format("02 Jan 15:04"),
 				})
 			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(list)
+}
+
+func handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	jobID := r.URL.Query().Get("job")
+	if !validJob.MatchString(jobID) {
+		http.Error(w, "Invalid job id", http.StatusBadRequest)
+		return
+	}
+	jobsMu.RLock()
+	st, ok := jobs[jobID]
+	jobsMu.RUnlock()
+	if !ok {
+		http.Error(w, "Job not found", http.StatusNotFound)
+		return
+	}
+	st.mu.Lock()
+	st.Canceled = true
+	cmd := st.Cmd
+	st.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		if runtime.GOOS == "windows" {
+			_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+		} else {
+			_ = cmd.Process.Kill()
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"canceled": true})
+}
+
+func handleDeleteJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	jobID := r.URL.Query().Get("job")
+	if !validJob.MatchString(jobID) {
+		http.Error(w, "Invalid job id", http.StatusBadRequest)
+		return
+	}
+	target := filepath.Join("jobs", jobID)
+	if err := os.RemoveAll(target); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"deleted": true})
 }
 
 func withHeaders(next http.Handler) http.Handler {
@@ -406,6 +481,8 @@ func main() {
 	mux.HandleFunc("/api/upload", handleUpload)
 	mux.HandleFunc("/api/events", handleEvents)
 	mux.HandleFunc("/api/jobs", handleListJobs)
+	mux.HandleFunc("/api/jobs/cancel", handleCancelJob)
+	mux.HandleFunc("/api/jobs/delete", handleDeleteJob)
 
 	fmt.Println("====================================================")
 	fmt.Println("   RATHORESCAN 3D STUDIO - LOCAL PC APP SERVER")

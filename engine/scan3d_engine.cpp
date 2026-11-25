@@ -229,7 +229,7 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
-    // 2. COLMAP Feature Extraction (GPU SIFT)
+    // 2. COLMAP Feature Extraction (GPU SIFT with Domain-Size Pooling for stronger angle invariance)
     logProgress(25, "Running COLMAP GPU SIFT on " + std::to_string(totalImages) + " views...");
     std::string colmapCall = "\"" + cfg.colmap + "\"";
 #ifdef _WIN32
@@ -239,41 +239,51 @@ int main(int argc, char* argv[]) {
 #endif
 
     std::string singleCam = (mode == "video") ? "1" : "0";
+    std::string maxFeats = (preset == "lowpoly") ? "4096" : (preset == "balanced" ? "6144" : "8192");
     std::string featCmd = colmapCall + " feature_extractor"
         " --database_path \"" + dbPath.string() + "\""
         " --image_path \"" + imgDir.string() + "\""
         " --ImageReader.single_camera " + singleCam +
         " --FeatureExtraction.use_gpu 1"
-        " --FeatureExtraction.max_image_size " + std::to_string(maxImgSize);
+        " --FeatureExtraction.max_image_size " + std::to_string(maxImgSize) +
+        " --SiftExtraction.max_num_features " + maxFeats +
+        " --SiftExtraction.domain_size_pooling 1";
+    if (preset == "highpoly" || preset == "ultra") {
+        featCmd += " --SiftExtraction.estimate_affine_shape 1";
+    }
     if (runCmd(featCmd) != 0) {
         std::cerr << "[ERROR] COLMAP feature_extractor failed.\n";
         return 3;
     }
 
-    // 3. Smart COLMAP Matcher (Exhaustive for <=40 views for max registration, Sequential for larger videos)
+    // 3. Smart COLMAP Matcher (Guided Matching + Exhaustive for <=40 views)
     std::string matchCmd;
     if (totalImages <= 40) {
-        logProgress(40, "Running full cross-angle Exhaustive Matching (" + std::to_string(totalImages) + " views)...");
+        logProgress(40, "Running Guided Exhaustive Matching (" + std::to_string(totalImages) + " views)...");
         matchCmd = colmapCall + " exhaustive_matcher"
             " --database_path \"" + dbPath.string() + "\""
-            " --FeatureMatching.use_gpu 1";
+            " --FeatureMatching.use_gpu 1"
+            " --FeatureMatching.guided_matching 1";
     } else if (mode == "video") {
-        logProgress(40, "Matching sequential video frames on GPU...");
+        logProgress(40, "Matching sequential video frames with Guided Matching on GPU...");
         matchCmd = colmapCall + " sequential_matcher"
             " --database_path \"" + dbPath.string() + "\""
             " --FeatureMatching.use_gpu 1"
+            " --FeatureMatching.guided_matching 1"
             " --SequentialMatching.overlap 18"
             " --SequentialMatching.quadratic_overlap 1";
     } else if (totalImages <= 120) {
-        logProgress(40, "Running full cross-angle Exhaustive Matching for high accuracy...");
+        logProgress(40, "Running Guided Exhaustive Matching for high accuracy...");
         matchCmd = colmapCall + " exhaustive_matcher"
             " --database_path \"" + dbPath.string() + "\""
-            " --FeatureMatching.use_gpu 1";
+            " --FeatureMatching.use_gpu 1"
+            " --FeatureMatching.guided_matching 1";
     } else {
         logProgress(40, "Matching large 100+ photo set with quadratic overlap on GPU...");
         matchCmd = colmapCall + " sequential_matcher"
             " --database_path \"" + dbPath.string() + "\""
             " --FeatureMatching.use_gpu 1"
+            " --FeatureMatching.guided_matching 1"
             " --SequentialMatching.overlap 22"
             " --SequentialMatching.quadratic_overlap 1";
     }
@@ -290,16 +300,36 @@ int main(int argc, char* argv[]) {
         " --output_path \"" + sparseDir.string() + "\""
         " --Mapper.min_num_matches 10"
         " --Mapper.init_min_num_inliers 50";
-    if (runCmd(mapCmd) != 0 || !fs::exists(sparseDir / "0")) {
-        std::cerr << "[ERROR] COLMAP mapper failed. Ensure overlapping 360° angles & good lighting.\n";
+    if (runCmd(mapCmd) != 0) {
+        std::cerr << "[ERROR] COLMAP mapper failed.\n";
+        return 5;
+    }
+
+    // Automatically select the largest sparse sub-model inside sparse/ (0, 1, 2...)
+    fs::path bestSparse;
+    uintmax_t bestScore = 0;
+    for (const auto& entry : fs::directory_iterator(sparseDir)) {
+        if (!entry.is_directory()) continue;
+        fs::path imgBin = entry.path() / "images.bin";
+        fs::path ptsBin = entry.path() / "points3D.bin";
+        if (fs::exists(imgBin) && fs::exists(ptsBin)) {
+            uintmax_t score = fs::file_size(imgBin) + fs::file_size(ptsBin);
+            if (score > bestScore) {
+                bestScore = score;
+                bestSparse = entry.path();
+            }
+        }
+    }
+    if (bestSparse.empty()) {
+        std::cerr << "[ERROR] COLMAP mapper could not align cameras. Ensure slow 360 movement around a static textured object.\n";
         return 5;
     }
 
     // 5. Undistort Images for OpenMVS
-    logProgress(62, "Undistorting camera frames for Dense Reconstruction...");
+    logProgress(62, "Undistorting camera frames from best sparse model (" + bestSparse.filename().string() + ")...");
     std::string undistCmd = colmapCall + " image_undistorter"
         " --image_path \"" + imgDir.string() + "\""
-        " --input_path \"" + (sparseDir / "0").string() + "\""
+        " --input_path \"" + bestSparse.string() + "\""
         " --output_path \"" + denseDir.string() + "\""
         " --output_type COLMAP"
         " --max_image_size " + std::to_string(maxImgSize);
