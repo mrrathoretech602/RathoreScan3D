@@ -184,7 +184,7 @@ int main(int argc, char* argv[]) {
         logProgress(8, "Extracting sharp frames from video via FFmpeg...");
         std::string ffCmd = "\"" + cfg.ffmpeg + "\" -y -i \"" + videoPath.string() +
             "\" -vf \"fps=" + fps + ",mpdecimate=hi=64*12:lo=64*5:frac=0.33,scale='min(" +
-            std::to_string(maxImgSize) + ",iw)':-2\" -vsync vfr -qscale:v 2 \"" +
+            std::to_string(maxImgSize) + ",iw)':-2\" -fps_mode vfr -qscale:v 2 \"" +
             (imgDir / "frame_%04d.jpg").string() + "\"";
         if (runCmd(ffCmd) != 0) {
             std::cerr << "[ERROR] FFmpeg video frame extraction failed.\n";
@@ -243,8 +243,8 @@ int main(int argc, char* argv[]) {
         " --database_path \"" + dbPath.string() + "\""
         " --image_path \"" + imgDir.string() + "\""
         " --ImageReader.single_camera " + singleCam +
-        " --SiftExtraction.use_gpu 1"
-        " --SiftExtraction.max_image_size " + std::to_string(maxImgSize);
+        " --FeatureExtraction.use_gpu 1"
+        " --FeatureExtraction.max_image_size " + std::to_string(maxImgSize);
     if (runCmd(featCmd) != 0) {
         std::cerr << "[ERROR] COLMAP feature_extractor failed.\n";
         return 3;
@@ -256,18 +256,18 @@ int main(int argc, char* argv[]) {
         logProgress(40, "Matching sequential video frames on GPU...");
         matchCmd = colmapCall + " sequential_matcher"
             " --database_path \"" + dbPath.string() + "\""
-            " --SiftMatching.use_gpu 1"
+            " --FeatureMatching.use_gpu 1"
             " --SequentialMatching.overlap 15";
     } else if (totalImages <= 120) {
         logProgress(40, "Running full cross-angle Exhaustive Matching for high accuracy...");
         matchCmd = colmapCall + " exhaustive_matcher"
             " --database_path \"" + dbPath.string() + "\""
-            " --SiftMatching.use_gpu 1";
+            " --FeatureMatching.use_gpu 1";
     } else {
         logProgress(40, "Matching large 100+ photo set with quadratic overlap on GPU...");
         matchCmd = colmapCall + " sequential_matcher"
             " --database_path \"" + dbPath.string() + "\""
-            " --SiftMatching.use_gpu 1"
+            " --FeatureMatching.use_gpu 1"
             " --SequentialMatching.overlap 22"
             " --SequentialMatching.quadratic_overlap 1";
     }
@@ -314,7 +314,7 @@ int main(int argc, char* argv[]) {
     // 7. OpenMVS InterfaceCOLMAP
     logProgress(74, "Initializing OpenMVS scene...");
     std::string mvsInit = mvsExe(cfg, "InterfaceCOLMAP") +
-        " -i dense -o scene.mvs --image-folder dense/images";
+        " -i dense -o scene.mvs --image-folder images";
     if (runCmd(mvsInit, jobDir.string()) != 0) {
         std::cerr << "[ERROR] OpenMVS InterfaceCOLMAP failed.\n";
         return 8;
