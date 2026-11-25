@@ -250,14 +250,20 @@ int main(int argc, char* argv[]) {
         return 3;
     }
 
-    // 3. Smart COLMAP Matcher (Sequential for video, Exhaustive/Hybrid for multi-photo)
+    // 3. Smart COLMAP Matcher (Exhaustive for <=40 views for max registration, Sequential for larger videos)
     std::string matchCmd;
-    if (mode == "video") {
+    if (totalImages <= 40) {
+        logProgress(40, "Running full cross-angle Exhaustive Matching (" + std::to_string(totalImages) + " views)...");
+        matchCmd = colmapCall + " exhaustive_matcher"
+            " --database_path \"" + dbPath.string() + "\""
+            " --FeatureMatching.use_gpu 1";
+    } else if (mode == "video") {
         logProgress(40, "Matching sequential video frames on GPU...");
         matchCmd = colmapCall + " sequential_matcher"
             " --database_path \"" + dbPath.string() + "\""
             " --FeatureMatching.use_gpu 1"
-            " --SequentialMatching.overlap 15";
+            " --SequentialMatching.overlap 18"
+            " --SequentialMatching.quadratic_overlap 1";
     } else if (totalImages <= 120) {
         logProgress(40, "Running full cross-angle Exhaustive Matching for high accuracy...");
         matchCmd = colmapCall + " exhaustive_matcher"
@@ -281,7 +287,9 @@ int main(int argc, char* argv[]) {
     std::string mapCmd = colmapCall + " mapper"
         " --database_path \"" + dbPath.string() + "\""
         " --image_path \"" + imgDir.string() + "\""
-        " --output_path \"" + sparseDir.string() + "\"";
+        " --output_path \"" + sparseDir.string() + "\""
+        " --Mapper.min_num_matches 10"
+        " --Mapper.init_min_num_inliers 50";
     if (runCmd(mapCmd) != 0 || !fs::exists(sparseDir / "0")) {
         std::cerr << "[ERROR] COLMAP mapper failed. Ensure overlapping 360° angles & good lighting.\n";
         return 5;
@@ -331,12 +339,36 @@ int main(int argc, char* argv[]) {
         return 9;
     }
 
-    // 9. OpenMVS ReconstructMesh (with preset poly decimation)
+    // 9. OpenMVS ReconstructMesh (with preset poly decimation + safe fallback)
     logProgress(90, "Building 3D Polygon Mesh (Preset: " + preset + ")...");
     std::string meshCmd = mvsExe(cfg, "ReconstructMesh") +
         " scene_dense.mvs -o scene_mesh.mvs --decimate " + decimateFactor;
     if (runCmd(meshCmd, jobDir.string()) != 0) {
         std::cerr << "[ERROR] OpenMVS ReconstructMesh failed.\n";
+        return 10;
+    }
+
+    fs::path meshPly = jobDir / "scene_mesh.ply";
+    auto hasValidMesh = [](const fs::path& p) {
+        if (!fs::exists(p) || fs::file_size(p) < 256) return false;
+        std::ifstream in(p, std::ios::binary);
+        std::string header;
+        for (int i = 0; i < 20 && std::getline(in, header); ++i) {
+            if (header.find("element face 0") != std::string::npos) return false;
+            if (header.find("end_header") != std::string::npos) break;
+        }
+        return true;
+    };
+
+    if (!hasValidMesh(meshPly) && decimateFactor != "1.0") {
+        logProgress(92, "Retrying Mesh Reconstruction without decimation...");
+        std::string retryMeshCmd = mvsExe(cfg, "ReconstructMesh") +
+            " scene_dense.mvs -o scene_mesh.mvs --decimate 1";
+        runCmd(retryMeshCmd, jobDir.string());
+    }
+
+    if (!hasValidMesh(meshPly)) {
+        std::cerr << "[ERROR] Reconstructed 3D mesh has 0 faces (insufficient 3D parallax/overlap in video/photos). Move slowly 360 degrees around a textured object or upload 15+ overlapping photos.\n";
         return 10;
     }
 
