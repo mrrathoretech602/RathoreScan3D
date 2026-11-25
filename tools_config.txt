@@ -2,4 +2,4 @@
 # Download FFmpeg, COLMAP (CUDA), and OpenMVS Windows binaries and set their exact paths below:
 FFMPEG_BIN=C:\Tools\ffmpeg\bin\ffmpeg.exe
 COLMAP_BIN=C:\Tools\COLMAP\COLMAP.bat
-OPENMVS_DIR=C:\Tools\OpenMVS\bin
+OPENMVS_DIR=C:\Tools\OpenMVS\vc17\x64\Release
