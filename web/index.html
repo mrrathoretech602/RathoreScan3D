@@ -57,12 +57,12 @@
     user-select: none;
   }
 
-  /* --- APP HEADER (PC, LAPTOP, TABLET & MOBILE TOP BAR) --- */
+  /* --- APP HEADER --- */
   header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 10px;
     padding: calc(10px + var(--safe-top)) calc(14px + var(--safe-right)) 10px calc(14px + var(--safe-left));
     background: rgba(19, 24, 35, 0.94);
     backdrop-filter: blur(12px);
@@ -75,7 +75,7 @@
   .brand {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
     min-width: 0;
   }
 
@@ -89,8 +89,8 @@
 
   .logo {
     font-weight: 800;
-    letter-spacing: 0.8px;
-    font-size: clamp(0.95rem, 1.5vw, 1.1rem);
+    letter-spacing: 0.7px;
+    font-size: clamp(0.92rem, 1.5vw, 1.08rem);
     color: var(--accent);
     white-space: nowrap;
     overflow: hidden;
@@ -100,7 +100,7 @@
   .logo span {
     color: var(--text);
     font-weight: 400;
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     margin-left: 6px;
     opacity: 0.7;
   }
@@ -110,6 +110,37 @@
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
+  }
+
+  .conn-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    border: 1px solid var(--border);
+    background: #0d121c;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .conn-pill.ok {
+    border-color: rgba(0, 230, 118, 0.45);
+    color: var(--ok);
+  }
+
+  .conn-pill.warn {
+    border-color: rgba(255, 179, 0, 0.45);
+    color: var(--warn);
+  }
+
+  .conn-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
   }
 
   nav.top-nav {
@@ -135,23 +166,17 @@
     touch-action: manipulation;
   }
 
-  nav.top-nav button:hover {
-    color: var(--text);
-  }
-
-  nav.top-nav button.active {
-    background: var(--accent);
-    color: #050a10;
-  }
+  nav.top-nav button:hover { color: var(--text); }
+  nav.top-nav button.active { background: var(--accent); color: #050a10; }
 
   #btnInstallApp {
     display: none;
     background: rgba(0, 229, 255, 0.14);
     color: var(--accent);
     border: 1px solid rgba(0, 229, 255, 0.45);
-    padding: 7px 12px;
+    padding: 7px 11px;
     border-radius: 8px;
-    font-size: 0.78rem;
+    font-size: 0.76rem;
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
@@ -218,29 +243,75 @@
   }
 
   .card h3 {
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     color: var(--accent);
     text-transform: uppercase;
     letter-spacing: 0.6px;
   }
+
+  .bridge-bar {
+    background: linear-gradient(135deg, rgba(0, 229, 255, 0.06), rgba(124, 77, 255, 0.06));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .bridge-inputs {
+    display: flex;
+    flex: 1 1 320px;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  input[type="url"], input[type="text"] {
+    background: #0d121c;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 9px 12px;
+    min-height: 42px;
+    border-radius: 9px;
+    font-size: 0.84rem;
+    flex: 1 1 210px;
+    min-width: 0;
+  }
+
+  .chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .mini-chip {
+    font-size: 0.72rem;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: #0d121c;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+
+  .mini-chip.ok { border-color: rgba(0, 230, 118, 0.45); color: var(--ok); }
+  .mini-chip.err { border-color: rgba(255, 82, 82, 0.45); color: var(--err); }
 
   /* --- CAMERA PREVIEW --- */
   .cam-wrap {
     position: relative;
     width: 100%;
     aspect-ratio: 16 / 10;
-    max-height: 52dvh;
+    max-height: 50dvh;
     background: #000;
     border-radius: 12px;
     overflow: hidden;
     border: 1px solid var(--border);
   }
 
-  video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
+  video { width: 100%; height: 100%; object-fit: cover; }
 
   .ar-ring {
     position: absolute;
@@ -252,8 +323,8 @@
   }
 
   .ar-ring svg {
-    width: min(62%, 240px);
-    height: min(62%, 240px);
+    width: min(60%, 230px);
+    height: min(60%, 230px);
     opacity: 0.88;
   }
 
@@ -264,7 +335,7 @@
     right: 10px;
     width: fit-content;
     max-width: calc(100% - 20px);
-    background: rgba(5, 8, 14, 0.72);
+    background: rgba(5, 8, 14, 0.75);
     backdrop-filter: blur(6px);
     padding: 5px 11px;
     border-radius: 20px;
@@ -280,12 +351,12 @@
     background: linear-gradient(135deg, var(--accent), var(--accent2));
     color: #fff;
     border: none;
-    padding: 11px 16px;
+    padding: 10px 15px;
     min-height: 44px;
     border-radius: 10px;
     font-weight: 700;
     cursor: pointer;
-    font-size: 0.88rem;
+    font-size: 0.86rem;
     text-align: center;
     display: inline-flex;
     align-items: center;
@@ -295,30 +366,15 @@
     transition: transform 0.1s, opacity 0.15s;
   }
 
-  .btn:active:not(:disabled) {
-    transform: scale(0.98);
-  }
-
-  .btn.sec {
-    background: #1e2738;
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-
+  .btn:active:not(:disabled) { transform: scale(0.98); }
+  .btn.sec { background: #1e2738; color: var(--text); border: 1px solid var(--border); }
   .btn.danger { background: var(--err); }
   .btn.ok { background: var(--ok); color: #05150a; }
   .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+  .btn.sm { min-height: 36px; padding: 6px 10px; font-size: 0.76rem; border-radius: 8px; }
 
-  .row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .row-actions > .btn {
-    flex: 1 1 140px;
-  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row-actions > .btn { flex: 1 1 130px; }
 
   select {
     background: #0d121c;
@@ -328,7 +384,7 @@
     min-height: 44px;
     border-radius: 9px;
     width: 100%;
-    font-size: 0.86rem;
+    font-size: 0.84rem;
   }
 
   input[type="range"] {
@@ -340,7 +396,7 @@
     border: 1px solid var(--border);
     border-radius: 999px;
     outline: none;
-    margin: 6px 0 8px;
+    margin: 5px 0 7px;
   }
 
   input[type="range"]::-webkit-slider-thumb {
@@ -364,10 +420,19 @@
   }
 
   label {
-    font-size: 0.79rem;
+    font-size: 0.78rem;
     color: var(--muted);
     display: block;
     margin-bottom: 4px;
+  }
+
+  .status-box {
+    background: #0d121c;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.8rem;
+    line-height: 1.45;
   }
 
   /* --- BUILD MONITOR --- */
@@ -384,7 +449,7 @@
     height: 100%;
     width: 0%;
     background: linear-gradient(90deg, var(--accent), var(--ok));
-    transition: width 0.3s;
+    transition: width 0.25s;
   }
 
   #consoleLog {
@@ -404,7 +469,7 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  /* --- 3D STUDIO LAYOUT (PC / LAPTOP / TABLET / MOBILE) --- */
+  /* --- 3D STUDIO LAYOUT --- */
   #tab-studio {
     padding: 0;
     flex-direction: row;
@@ -428,7 +493,7 @@
   }
 
   #studioSidebar {
-    width: 340px;
+    width: 350px;
     flex-shrink: 0;
     background: var(--panel);
     border-left: 1px solid var(--border);
@@ -440,15 +505,13 @@
     gap: 12px;
   }
 
-  .studio-section {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
+  .studio-section { display: flex; flex-direction: column; gap: 6px; }
+  .studio-divider { border-top: 1px solid var(--border); padding-top: 10px; }
 
-  .studio-divider {
-    border-top: 1px solid var(--border);
-    padding-top: 10px;
+  .export-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
   }
 
   .stats-pill {
@@ -456,11 +519,11 @@
     top: 12px;
     left: 12px;
     max-width: calc(100% - 24px);
-    background: rgba(11, 14, 20, 0.82);
+    background: rgba(11, 14, 20, 0.84);
     backdrop-filter: blur(6px);
     padding: 6px 12px;
     border-radius: 8px;
-    font-size: 0.76rem;
+    font-size: 0.75rem;
     border: 1px solid var(--border);
     pointer-events: none;
     white-space: nowrap;
@@ -517,7 +580,6 @@
     cursor: pointer;
     position: relative;
     touch-action: manipulation;
-    transition: color 0.15s, background 0.15s;
   }
 
   nav.bottom-nav button svg {
@@ -546,31 +608,17 @@
     background: var(--ok);
     box-shadow: 0 0 8px var(--ok);
   }
-
   .nav-dot.live { display: block; }
 
-  /* --- TABLET BREAKPOINT (641px - 1024px) --- */
+  /* --- TABLET BREAKPOINT --- */
   @media (max-width: 1024px) {
-    .grid-2 {
-      grid-template-columns: 1fr;
-    }
-
-    #studioSidebar {
-      width: 295px;
-    }
+    .grid-2 { grid-template-columns: 1fr; }
+    #studioSidebar { width: 305px; }
   }
 
   @media (max-width: 860px) {
-    #tab-studio {
-      flex-direction: column;
-    }
-
-    #viewport {
-      flex: none;
-      height: 50dvh;
-      min-height: 240px;
-    }
-
+    #tab-studio { flex-direction: column; }
+    #viewport { flex: none; height: 48dvh; min-height: 230px; }
     #studioSidebar {
       width: 100%;
       flex: 1;
@@ -582,84 +630,30 @@
       gap: 12px 16px;
       align-content: start;
     }
-
-    #studioSidebar .studio-full {
-      grid-column: 1 / -1;
-    }
+    #studioSidebar .studio-full { grid-column: 1 / -1; }
   }
 
-  /* --- MOBILE PHONE APP MODE (<= 640px) --- */
+  /* --- MOBILE PHONE APP MODE --- */
   @media (max-width: 640px) {
     header {
       padding: calc(8px + var(--safe-top)) calc(12px + var(--safe-right)) 8px calc(12px + var(--safe-left));
     }
-
-    .logo span {
-      display: none;
-    }
-
-    nav.top-nav {
-      display: none;
-    }
-
-    nav.bottom-nav {
-      display: flex;
-      gap: 6px;
-    }
-
-    .tab {
-      padding: 10px 12px 18px;
-    }
-
-    .card {
-      border-radius: 12px;
-      padding: 13px;
-      gap: 10px;
-    }
-
-    .cam-wrap {
-      aspect-ratio: 4 / 3;
-      max-height: 38dvh;
-    }
-
-    .form-grid {
-      grid-template-columns: 1fr;
-      gap: 10px;
-    }
-
-    #viewport {
-      height: 44dvh;
-      min-height: 220px;
-    }
-
-    #studioSidebar {
-      grid-template-columns: 1fr;
-      padding: 12px 12px 20px;
-      gap: 11px;
-    }
-
-    input[type="range"]::-webkit-slider-thumb {
-      width: 24px;
-      height: 24px;
-    }
-
-    input[type="range"]::-moz-range-thumb {
-      width: 24px;
-      height: 24px;
-    }
+    .logo span { display: none; }
+    nav.top-nav { display: none; }
+    nav.bottom-nav { display: flex; gap: 6px; }
+    .tab { padding: 10px 12px 18px; }
+    .card { border-radius: 12px; padding: 13px; gap: 10px; }
+    .cam-wrap { aspect-ratio: 4 / 3; max-height: 36dvh; }
+    .form-grid { grid-template-columns: 1fr; gap: 10px; }
+    #viewport { height: 42dvh; min-height: 210px; }
+    #studioSidebar { grid-template-columns: 1fr; padding: 12px 12px 20px; gap: 11px; }
+    input[type="range"]::-webkit-slider-thumb { width: 24px; height: 24px; }
+    input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; }
   }
 
-  /* --- SHORT LANDSCAPE PHONES --- */
   @media (max-height: 520px) and (orientation: landscape) {
-    #tab-studio {
-      flex-direction: row;
-    }
-
-    #viewport {
-      height: 100%;
-      flex: 1;
-    }
-
+    #tab-studio { flex-direction: row; }
+    #viewport { height: 100%; flex: 1; }
     #studioSidebar {
       width: 270px;
       height: 100%;
@@ -668,10 +662,7 @@
       border-top: none;
       border-left: 1px solid var(--border);
     }
-
-    .cam-wrap {
-      max-height: 58dvh;
-    }
+    .cam-wrap { max-height: 56dvh; }
   }
 </style>
 
@@ -689,9 +680,10 @@
 <header>
   <div class="brand">
     <img src="/icon-192.png" alt="Scan3D" class="brand-icon" />
-    <div class="logo">RATHORESCAN 3D <span>Mobile, Tablet &amp; PC Studio</span></div>
+    <div class="logo">RATHORESCAN 3D <span>PC + Mobile Studio</span></div>
   </div>
   <div class="header-actions">
+    <span class="conn-pill" id="enginePill"><span class="conn-dot"></span><span id="enginePillText">Checking...</span></span>
     <button id="btnInstallApp">Install App</button>
     <nav class="top-nav" aria-label="Primary Navigation">
       <button class="active" data-tab="capture" onclick="switchTab('capture')">1. Capture</button>
@@ -702,12 +694,24 @@
 </header>
 
 <main>
-  <!-- TAB 1: CAPTURE -->
+  <!-- TAB 1: CAPTURE & MULTI-PHOTO / VIDEO UPLOAD -->
   <section id="tab-capture" class="tab active">
     <div class="tab-inner">
+      <!-- LIVE PC SERVER / VERCEL MOBILE BRIDGE -->
+      <div class="bridge-bar">
+        <div class="bridge-inputs">
+          <input type="url" id="serverUrlInput" placeholder="PC Server URL (e.g. https://192.168.1.5:8443 or Cloudflare Tunnel)" />
+          <button class="btn sec sm" id="btnConnectServer">Connect PC</button>
+          <button class="btn sec sm" id="btnResetServer">Local</button>
+        </div>
+        <div class="chip-row" id="healthChips">
+          <span class="mini-chip">Connecting to PC engine...</span>
+        </div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
-          <h3>360° Live Camera Guide</h3>
+          <h3>360° Live Camera &amp; Multi-Angle Snap</h3>
           <div class="cam-wrap">
             <video id="camPreview" autoplay playsinline muted></video>
             <div class="ar-ring">
@@ -723,47 +727,60 @@
           </div>
           <div class="row row-actions">
             <button class="btn sec" id="btnStartCam">Open Camera</button>
-            <button class="btn" id="btnRec" disabled>Start 360° Record</button>
-            <button class="btn danger" id="btnStopRec" disabled>Stop &amp; Use Video</button>
+            <button class="btn" id="btnRec" disabled>Record 360° Video</button>
+            <button class="btn sec" id="btnSnapPhoto" disabled>Snap Photo (+1)</button>
+            <button class="btn danger" id="btnStopRec" disabled>Stop Video</button>
           </div>
           <p style="font-size:0.78rem; color:var(--muted); line-height:1.45;">
-            Tip: Object ke charo taraf <b>slowly 2 circles</b> ghumo (1 eye-level, 1 high-angle, ~25-40 sec video). Shadows soft rakho.
+            Tip: <b>Jitne zyada angles (50–100+ photos ya slow 360° video)</b> loge, utna hi real aur accurate 3D mesh banega.
           </p>
         </div>
 
         <div class="card">
-          <h3>Native 4K Camera / Video Upload</h3>
-          <p style="font-size:0.82rem; color:var(--muted); line-height:1.45;">
-            Best sharp quality (OIS + 4K) ke liye phone ka native camera use karo ya existing video select karo:
+          <h3>Upload Video or 100+ Photos</h3>
+          <p style="font-size:0.81rem; color:var(--muted); line-height:1.45;">
+            Phone/Laptop se <b>4K video</b> ya <b>100+ multi-angle photos</b> select karo (ya dono ek saath hybrid mode me):
           </p>
           <input type="file" id="fileInput" accept="video/*" capture="environment" style="display:none" />
-          <button class="btn sec" style="width:100%;" onclick="document.getElementById('fileInput').click()">
-            Record Native 4K Video / Pick File
-          </button>
-          <div id="selectedInfo" style="font-size:0.82rem; color:var(--ok);">No video selected yet.</div>
+          <input type="file" id="photoInput" accept="image/*" multiple style="display:none" />
+          <div class="row row-actions">
+            <button class="btn sec" onclick="document.getElementById('fileInput').click()">
+              Pick / Record 4K Video
+            </button>
+            <button class="btn" onclick="document.getElementById('photoInput').click()">
+              Select 100+ Photos (Batch)
+            </button>
+          </div>
+
+          <div class="status-box" id="selectedInfo">No video or photos selected yet.</div>
 
           <div class="form-grid">
             <div>
-              <label for="presetSel">Reconstruction Quality</label>
+              <label for="presetSel">Poly-Budget &amp; Realism Preset</label>
               <select id="presetSel">
-                <option value="fast">Fast Preview (1280px, ~3 min)</option>
-                <option value="balanced" selected>Game Ready (1600px, 4GB VRAM Safe)</option>
-                <option value="ultra">Ultra Detail + Refine (2048px)</option>
+                <option value="lowpoly">Low-Poly Fast (1024px · Tiny File Size)</option>
+                <option value="balanced" selected>Balanced Game-Ready (1440px · 4GB VRAM)</option>
+                <option value="highpoly">High-Poly Detail + Refine (1920px)</option>
+                <option value="ultra">Ultra Photorealistic (2400px · Max Detail)</option>
               </select>
             </div>
             <div>
-              <label for="fpsSel">Frame Extraction Rate</label>
+              <label for="fpsSel">Video Frame Rate (Video Mode)</label>
               <select id="fpsSel">
                 <option value="1">1 FPS (Long Video 60s+)</option>
                 <option value="2" selected>2 FPS (Standard 30s Video)</option>
                 <option value="3">3 FPS (Short 15s Video)</option>
+                <option value="4">4 FPS (Fast / Ultra Dense)</option>
               </select>
             </div>
           </div>
 
-          <button class="btn ok" style="width:100%;" id="btnBuild3D" disabled>Build 3D Model on PC Engine</button>
+          <div class="row">
+            <button class="btn ok" style="flex:1;" id="btnBuild3D" disabled>Build 3D Model on Laptop Engine</button>
+            <button class="btn sec sm" id="btnClearInputs" title="Clear selected media">Clear</button>
+          </div>
 
-          <h3 style="margin-top:4px;">Recent Scans</h3>
+          <h3 style="margin-top:2px;">Recent 3D Scans</h3>
           <div id="scanHistory" style="display:flex; flex-direction:column; gap:6px;"></div>
         </div>
       </div>
@@ -780,12 +797,12 @@
           <span id="pctLabel" style="color:var(--accent); font-weight:800;">0%</span>
         </div>
         <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
-        <div id="consoleLog">Ready. Upload or record a 360° video to begin reconstruction...</div>
+        <div id="consoleLog">Ready. Upload 100+ photos or a 360° video to begin reconstruction...</div>
       </div>
     </div>
   </section>
 
-  <!-- TAB 3: 3D STUDIO & UNITY/UNREAL EXPORTER -->
+  <!-- TAB 3: 3D STUDIO & MULTI-FORMAT EXPORTER -->
   <section id="tab-studio" class="tab">
     <div id="viewport">
       <div class="stats-pill" id="meshStats">No Model Loaded</div>
@@ -793,24 +810,40 @@
     <aside id="studioSidebar">
       <div class="row studio-full" style="justify-content:space-between;">
         <h3 style="color:var(--accent); font-size:0.9rem;">3D Studio Inspector</h3>
-        <button class="btn sec" style="min-height:36px; padding:5px 11px; font-size:0.76rem;" id="btnLoadDemo">Load Test Mesh</button>
+        <div class="row" style="gap:6px;">
+          <input type="file" id="localObjInput" accept=".obj" style="display:none" />
+          <button class="btn sec sm" onclick="document.getElementById('localObjInput').click()">Open .OBJ</button>
+          <button class="btn sec sm" id="btnLoadDemo">Test Mesh</button>
+        </div>
       </div>
 
       <div class="studio-section">
         <label>Shading Mode</label>
         <div class="row">
-          <button class="btn sec" style="flex:1; min-height:38px; padding:7px;" onclick="setShading('textured')">Textured</button>
-          <button class="btn sec" style="flex:1; min-height:38px; padding:7px;" onclick="setShading('clay')">Clay</button>
-          <button class="btn sec" style="flex:1; min-height:38px; padding:7px;" onclick="setShading('wire')">Wire</button>
+          <button class="btn sec sm" style="flex:1;" onclick="setShading('textured')">Textured</button>
+          <button class="btn sec sm" style="flex:1;" onclick="setShading('clay')">Clay</button>
+          <button class="btn sec sm" style="flex:1;" onclick="setShading('wire')">Wire</button>
         </div>
       </div>
 
       <div class="studio-section">
         <label>Quick Orientation &amp; Pivot Fix</label>
         <div class="row">
-          <button class="btn sec" style="flex:1; min-height:38px; padding:8px; font-size:0.78rem;" id="btnFixAxis">Flip Y-Up</button>
-          <button class="btn sec" style="flex:1; min-height:38px; padding:8px; font-size:0.78rem;" id="btnGroundPivot">Ground Pivot</button>
+          <button class="btn sec sm" style="flex:1;" id="btnFixAxis">Flip Y-Up</button>
+          <button class="btn sec sm" style="flex:1;" id="btnGroundPivot">Ground Pivot</button>
         </div>
+      </div>
+
+      <!-- HIGH-POLY <-> LOW-POLY OPTIMIZER -->
+      <div class="studio-section studio-divider">
+        <label style="color:var(--accent); font-weight:700;">High-Poly ↔ Low-Poly Optimizer (<span id="polyKeepVal">100%</span>)</label>
+        <input type="range" id="polyKeepSlider" min="5" max="100" step="5" value="100" />
+        <div class="row">
+          <button class="btn sec sm" style="flex:1;" onclick="setPolyKeep(15)">Low (15%)</button>
+          <button class="btn sec sm" style="flex:1;" onclick="setPolyKeep(45)">Med (45%)</button>
+          <button class="btn sec sm" style="flex:1;" onclick="setPolyKeep(100)">Reset</button>
+        </div>
+        <button class="btn" style="width:100%; min-height:38px;" id="btnOptimizePoly">Apply Poly Optimize</button>
       </div>
 
       <div class="studio-section">
@@ -826,19 +859,28 @@
       </div>
 
       <div class="studio-section studio-divider">
-        <label style="color:var(--warn); font-weight:700;">Floor &amp; Background Cropper (Destructive Trim)</label>
+        <label style="color:var(--warn); font-weight:700;">Floor &amp; Background Cropper</label>
         <label>Cut Floor Height Y (<span id="cropYVal">-5.0</span>)</label>
         <input type="range" id="cropY" min="-5" max="5" step="0.05" value="-5" />
         <label>Trim Outer Radius (<span id="cropRVal">20.0</span>)</label>
         <input type="range" id="cropR" min="0.5" max="20" step="0.1" value="20" />
-        <button class="btn sec" style="width:100%; margin-top:4px;" id="btnApplyCrop">Apply Crop &amp; Clean Mesh</button>
+        <button class="btn sec sm" style="width:100%;" id="btnApplyCrop">Apply Crop &amp; Clean Mesh</button>
       </div>
 
       <div class="studio-section studio-divider studio-full">
-        <label style="color:var(--ok); font-weight:700;">Export Game-Ready Asset</label>
-        <button class="btn ok" style="width:100%;" id="btnExportUnity">Export for Unity (.GLB)</button>
-        <button class="btn" style="width:100%;" id="btnExportUnreal">Export for Unreal Engine 5 (.GLB)</button>
-        <button class="btn sec" style="width:100%;" id="btnExportOBJ">Export Cleaned Mesh (.OBJ)</button>
+        <label style="color:var(--ok); font-weight:700;">Export Multi-Format 3D Assets</label>
+        <div class="row">
+          <button class="btn ok" style="flex:1;" id="btnExportUnity">Unity (.GLB)</button>
+          <button class="btn" style="flex:1;" id="btnExportUnreal">Unreal 5 (.GLB)</button>
+        </div>
+        <div class="export-grid">
+          <button class="btn sec sm" id="btnExportGLTF">.GLTF</button>
+          <button class="btn sec sm" id="btnExportOBJ">.OBJ</button>
+          <button class="btn sec sm" id="btnExportSTL">.STL (Print)</button>
+          <button class="btn sec sm" id="btnExportPLY">.PLY</button>
+          <button class="btn sec sm" id="btnExportUSDZ">.USDZ (AR)</button>
+          <button class="btn sec sm" id="btnExportJSON">.JSON</button>
+        </div>
       </div>
     </aside>
   </section>
@@ -868,6 +910,11 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
+import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+import { PLYExporter } from 'three/addons/exporters/PLYExporter.js';
+import { USDZExporter } from 'three/addons/exporters/USDZExporter.js';
+import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // --- PWA SERVICE WORKER & INSTALL PROMPT ---
 if ('serviceWorker' in navigator) {
@@ -888,7 +935,60 @@ btnInstallApp.onclick = async () => {
   btnInstallApp.style.display = 'none';
 };
 
-// --- TAB NAVIGATION (SYNC TOP & MOBILE BOTTOM NAV) ---
+// --- PC ENGINE BRIDGE (LOCALHOST / LAN / VERCEL REMOTE TUNNEL) ---
+const serverUrlInput = document.getElementById('serverUrlInput');
+const enginePill = document.getElementById('enginePill');
+const enginePillText = document.getElementById('enginePillText');
+const healthChips = document.getElementById('healthChips');
+
+const qpServer = new URLSearchParams(window.location.search).get('server');
+let serverBase = (qpServer || localStorage.getItem('rathorescan_server') || '').replace(/\/+$/, '');
+if (qpServer) localStorage.setItem('rathorescan_server', serverBase);
+serverUrlInput.value = serverBase;
+
+function apiUrl(path) {
+  return serverBase ? `${serverBase}${path}` : path;
+}
+
+async function checkEngineHealth() {
+  try {
+    const res = await fetch(apiUrl('/api/health'), { mode: 'cors' });
+    if (!res.ok) throw new Error('offline');
+    const h = await res.json();
+    enginePill.className = 'conn-pill ok';
+    enginePillText.textContent = serverBase ? 'Remote PC Online' : 'PC Engine Online';
+    const chip = (label, ok) => `<span class="mini-chip ${ok ? 'ok' : 'err'}">${label}: ${ok ? 'OK' : 'Missing'}</span>`;
+    healthChips.innerHTML =
+      chip('Go Server', true) +
+      chip('C++ Engine', h.engine_ready) +
+      chip('FFmpeg', h.ffmpeg_ready) +
+      chip('COLMAP', h.colmap_ready) +
+      chip('OpenMVS', h.openmvs_ready);
+  } catch {
+    enginePill.className = 'conn-pill warn';
+    enginePillText.textContent = 'Preview Mode';
+    healthChips.innerHTML = '<span class="mini-chip">Vercel Preview — Enter Laptop Server URL above to process on PC</span>';
+  }
+}
+
+document.getElementById('btnConnectServer').onclick = () => {
+  serverBase = serverUrlInput.value.trim().replace(/\/+$/, '');
+  localStorage.setItem('rathorescan_server', serverBase);
+  checkEngineHealth();
+  loadHistory();
+};
+
+document.getElementById('btnResetServer').onclick = () => {
+  serverBase = '';
+  serverUrlInput.value = '';
+  localStorage.removeItem('rathorescan_server');
+  checkEngineHealth();
+  loadHistory();
+};
+
+checkEngineHealth();
+
+// --- TAB NAVIGATION ---
 window.switchTab = name => {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('nav button[data-tab]').forEach(b => {
@@ -898,17 +998,47 @@ window.switchTab = name => {
   if (name === 'studio') requestAnimationFrame(resizeRenderer);
 };
 
-// --- CAMERA & VIDEO CAPTURE ---
-let mediaStream = null, recorder = null, chunks = [], selectedBlob = null, recTimer = null, recSec = 0;
+// --- CAMERA, VIDEO & 100+ MULTI-PHOTO BATCH ---
+let mediaStream = null, recorder = null, chunks = [], selectedBlob = null, selectedPhotos = [], recTimer = null, recSec = 0;
 const camPreview = document.getElementById('camPreview');
 const camStatus = document.getElementById('camStatus');
 const btnStartCam = document.getElementById('btnStartCam');
 const btnRec = document.getElementById('btnRec');
+const btnSnapPhoto = document.getElementById('btnSnapPhoto');
 const btnStopRec = document.getElementById('btnStopRec');
 const btnBuild3D = document.getElementById('btnBuild3D');
 const selectedInfo = document.getElementById('selectedInfo');
 const progressRing = document.getElementById('progressRing');
 const buildDot = document.getElementById('buildDot');
+const snapCanvas = document.createElement('canvas');
+
+function refreshSelectionSummary() {
+  const parts = [];
+  let totalBytes = 0;
+  if (selectedBlob) {
+    totalBytes += selectedBlob.size;
+    parts.push(`Video: ${selectedBlob.name} (${(selectedBlob.size / 1048576).toFixed(1)} MB)`);
+  }
+  if (selectedPhotos.length > 0) {
+    const pBytes = selectedPhotos.reduce((a, f) => a + f.size, 0);
+    totalBytes += pBytes;
+    const rating = selectedPhotos.length >= 80
+      ? 'Ultra Accuracy Ready'
+      : selectedPhotos.length >= 25
+        ? 'Good 360° Coverage'
+        : 'Add more angles (25–100+ recommended)';
+    parts.push(`Photos: ${selectedPhotos.length} (${(pBytes / 1048576).toFixed(1)} MB) — ${rating}`);
+  }
+  if (parts.length === 0) {
+    selectedInfo.textContent = 'No video or photos selected yet.';
+    selectedInfo.style.color = 'var(--muted)';
+    btnBuild3D.disabled = true;
+    return;
+  }
+  selectedInfo.innerHTML = parts.join('<br/>') + `<br/><span style="color:var(--accent)">Total Upload: ${(totalBytes / 1048576).toFixed(1)} MB</span>`;
+  selectedInfo.style.color = 'var(--ok)';
+  btnBuild3D.disabled = !selectedBlob && selectedPhotos.length < 3;
+}
 
 btnStartCam.onclick = async () => {
   try {
@@ -917,11 +1047,29 @@ btnStartCam.onclick = async () => {
       audio: false
     });
     camPreview.srcObject = mediaStream;
-    camStatus.textContent = 'Camera Ready — Point at Object';
+    camStatus.textContent = 'Camera Ready — Record or Snap 100+ Angles';
     btnRec.disabled = false;
+    btnSnapPhoto.disabled = false;
   } catch (e) {
-    alert('Live camera needs HTTPS (port 8443) or use the "Native 4K Camera" button!\nError: ' + e.message);
+    alert('Live camera needs HTTPS (port 8443 or Vercel HTTPS) or use "Pick / Record 4K Video"!\nError: ' + e.message);
   }
+};
+
+btnSnapPhoto.onclick = () => {
+  if (!mediaStream || !camPreview.videoWidth) return;
+  snapCanvas.width = camPreview.videoWidth;
+  snapCanvas.height = camPreview.videoHeight;
+  snapCanvas.getContext('2d').drawImage(camPreview, 0, 0);
+  snapCanvas.toBlob(blob => {
+    if (!blob) return;
+    const idx = selectedPhotos.length + 1;
+    const file = new File([blob], `snap_${String(idx).padStart(4, '0')}.jpg`, { type: 'image/jpeg' });
+    selectedPhotos.push(file);
+    const pct = Math.min(selectedPhotos.length / 60, 1);
+    progressRing.style.strokeDashoffset = 515 * (1 - pct);
+    camStatus.textContent = `Snapped ${selectedPhotos.length} Photos`;
+    refreshSelectionSummary();
+  }, 'image/jpeg', 0.92);
 };
 
 btnRec.onclick = () => {
@@ -930,8 +1078,7 @@ btnRec.onclick = () => {
   recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
   recorder.onstop = () => {
     selectedBlob = new File([new Blob(chunks, { type: 'video/webm' })], 'capture_360.webm', { type: 'video/webm' });
-    selectedInfo.textContent = `Recorded Video Ready (${(selectedBlob.size / 1048576).toFixed(1)} MB)`;
-    btnBuild3D.disabled = false;
+    refreshSelectionSummary();
   };
   recorder.start();
   btnRec.disabled = true; btnStopRec.disabled = false;
@@ -947,44 +1094,82 @@ btnStopRec.onclick = () => {
   clearInterval(recTimer);
   recorder.stop();
   btnRec.disabled = false; btnStopRec.disabled = true;
-  camStatus.textContent = 'Capture Saved!';
+  camStatus.textContent = 'Video Capture Saved!';
 };
 
 document.getElementById('fileInput').onchange = e => {
   const f = e.target.files[0];
   if (!f) return;
   selectedBlob = f;
-  selectedInfo.textContent = `Selected: ${f.name} (${(f.size / 1048576).toFixed(1)} MB)`;
-  btnBuild3D.disabled = false;
+  refreshSelectionSummary();
 };
 
-// --- UPLOAD & LIVE PIPELINE STREAM ---
-btnBuild3D.onclick = async () => {
-  if (!selectedBlob) return;
+document.getElementById('photoInput').onchange = e => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  selectedPhotos = selectedPhotos.concat(files);
+  refreshSelectionSummary();
+};
+
+document.getElementById('btnClearInputs').onclick = () => {
+  selectedBlob = null;
+  selectedPhotos = [];
+  document.getElementById('fileInput').value = '';
+  document.getElementById('photoInput').value = '';
+  progressRing.style.strokeDashoffset = 515;
+  refreshSelectionSummary();
+};
+
+// --- UPLOAD WITH REAL PROGRESS & LIVE SSE STREAM ---
+btnBuild3D.onclick = () => {
+  if (!selectedBlob && selectedPhotos.length < 3) return;
   const fd = new FormData();
-  fd.append('video', selectedBlob);
+  if (selectedBlob) fd.append('video', selectedBlob);
+  selectedPhotos.forEach(p => fd.append('photos', p));
   fd.append('preset', document.getElementById('presetSel').value);
   fd.append('fps', document.getElementById('fpsSel').value);
 
   switchTab('build');
   buildDot.classList.add('live');
   const logEl = document.getElementById('consoleLog');
-  logEl.textContent = 'Uploading video to PC over local Wi-Fi...\n';
+  const stageEl = document.getElementById('stageLabel');
+  const pctEl = document.getElementById('pctLabel');
+  const fillEl = document.getElementById('progressFill');
+  logEl.textContent = `Uploading ${selectedBlob ? 'video' : ''}${selectedBlob && selectedPhotos.length ? ' + ' : ''}${selectedPhotos.length ? selectedPhotos.length + ' photos' : ''} to Laptop Engine...\n`;
 
-  try {
-    const res = await fetch('/api/upload', { method: 'POST', body: fd });
-    if (res.status === 404 || res.status === 405) {
-      throw new Error('Local PC Go/C++ backend engine is not running here (Static/Vercel preview mode). Run `go run main.go` locally to reconstruct videos, or use "Load Test Mesh" in 3D Studio.');
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', apiUrl('/api/upload'), true);
+  xhr.upload.onprogress = ev => {
+    if (!ev.lengthComputable) return;
+    const upPct = Math.round((ev.loaded / ev.total) * 100);
+    stageEl.textContent = `Uploading to Laptop PC (${upPct}%)...`;
+    pctEl.textContent = `${upPct}%`;
+    fillEl.style.width = `${upPct}%`;
+  };
+  xhr.onerror = () => {
+    buildDot.classList.remove('live');
+    logEl.textContent += '[ERROR] Cannot reach Laptop Engine. Check PC Server URL or Wi-Fi connection.\n';
+  };
+  xhr.onload = () => {
+    if (xhr.status === 404 || xhr.status === 405) {
+      buildDot.classList.remove('live');
+      logEl.textContent += '[INFO] Static Vercel preview mode: connect your Laptop PC Server URL in Capture tab to run 3D reconstruction.\n';
+      return;
     }
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
+    if (xhr.status < 200 || xhr.status >= 300) {
+      buildDot.classList.remove('live');
+      logEl.textContent += `[ERROR] ${xhr.responseText}\n`;
+      return;
+    }
+    const data = JSON.parse(xhr.responseText);
+    logEl.textContent += `[OK] Upload complete! Job ID: ${data.job_id} (${data.mode})\n`;
 
-    const es = new EventSource('/api/events?job=' + data.job_id);
+    const es = new EventSource(apiUrl('/api/events?job=' + data.job_id));
     es.onmessage = ev => {
       const d = JSON.parse(ev.data);
-      document.getElementById('progressFill').style.width = d.percent + '%';
-      document.getElementById('pctLabel').textContent = d.percent + '%';
-      document.getElementById('stageLabel').textContent = d.message;
+      fillEl.style.width = d.percent + '%';
+      pctEl.textContent = d.percent + '%';
+      stageEl.textContent = d.message;
       logEl.textContent += `[${d.percent}%] ${d.message}\n`;
       logEl.scrollTop = logEl.scrollHeight;
 
@@ -992,42 +1177,37 @@ btnBuild3D.onclick = async () => {
         es.close();
         buildDot.classList.remove('live');
         loadHistory();
-        loadOBJModel(d.model_url, d.mtl_url);
+        loadOBJModel(apiUrl(d.model_url), apiUrl(d.mtl_url));
         switchTab('studio');
       } else if (d.status === 'error') {
         es.close();
         buildDot.classList.remove('live');
       }
     };
-  } catch (err) {
-    buildDot.classList.remove('live');
-    logEl.textContent += `[ERROR] ${err.message}\n`;
-  }
+  };
+  xhr.send(fd);
 };
 
 async function loadHistory() {
   const el = document.getElementById('scanHistory');
   try {
-    const res = await fetch('/api/jobs');
-    if (!res.ok) {
-      el.innerHTML = '<span style="font-size:0.78rem;color:var(--muted)">Preview mode — run local PC Go engine to build &amp; list 3D scans.</span>';
-      return;
-    }
+    const res = await fetch(apiUrl('/api/jobs'), { mode: 'cors' });
+    if (!res.ok) throw new Error('preview');
     const items = await res.json() || [];
     el.innerHTML = items.length ? '' : '<span style="font-size:0.78rem;color:var(--muted)">No previous scans yet.</span>';
     items.reverse().forEach(it => {
       const div = document.createElement('div');
       div.className = 'scan-item';
       div.innerHTML = `<span>${it.id}</span>
-        <button class="btn sec" style="min-height:36px;padding:5px 12px;font-size:0.76rem;flex-shrink:0;">Open 3D</button>`;
+        <button class="btn sec sm" style="flex-shrink:0;">Open 3D</button>`;
       div.querySelector('button').onclick = () => {
-        loadOBJModel(it.model_url, it.mtl_url);
+        loadOBJModel(apiUrl(it.model_url), apiUrl(it.mtl_url));
         switchTab('studio');
       };
       el.appendChild(div);
     });
   } catch {
-    el.innerHTML = '<span style="font-size:0.78rem;color:var(--muted)">Preview mode — run local PC Go engine to build &amp; list 3D scans.</span>';
+    el.innerHTML = '<span style="font-size:0.78rem;color:var(--muted)">Preview mode — connect your Laptop PC server URL above or test the 3D Studio tab.</span>';
   }
 }
 loadHistory();
@@ -1046,8 +1226,7 @@ container.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-// Studio Lighting
-scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+scene.add(new THREE.AmbientLight(0xffffff, 0.95));
 const dir1 = new THREE.DirectionalLight(0xffffff, 1.4); dir1.position.set(5, 8, 5); scene.add(dir1);
 const dir2 = new THREE.DirectionalLight(0x80d8ff, 0.6); dir2.position.set(-5, 3, -5); scene.add(dir2);
 scene.add(new THREE.GridHelper(10, 20, 0x00e5ff, 0x1e2738));
@@ -1067,9 +1246,7 @@ function resizeRenderer() {
   renderer.setSize(w, h, false);
 }
 window.addEventListener('resize', resizeRenderer);
-if ('ResizeObserver' in window) {
-  new ResizeObserver(resizeRenderer).observe(container);
-}
+if ('ResizeObserver' in window) new ResizeObserver(resizeRenderer).observe(container);
 resizeRenderer();
 
 function animate() {
@@ -1099,17 +1276,20 @@ function registerModel(obj) {
 }
 
 function updateStats() {
-  let tris = 0, verts = 0;
+  let tris = 0, verts = 0, bytes = 0;
   modelRoot.traverse(c => {
     if (c.isMesh && c.geometry) {
       const pos = c.geometry.attributes.position;
       if (pos) {
         verts += pos.count;
         tris += c.geometry.index ? c.geometry.index.count / 3 : pos.count / 3;
+        bytes += pos.array.byteLength;
+        if (c.geometry.index) bytes += c.geometry.index.array.byteLength;
       }
     }
   });
-  document.getElementById('meshStats').textContent = `Vertices: ${verts.toLocaleString()} | Triangles: ${Math.round(tris).toLocaleString()}`;
+  const kb = (bytes / 1024).toFixed(0);
+  document.getElementById('meshStats').textContent = `Verts: ${verts.toLocaleString()} | Tris: ${Math.round(tris).toLocaleString()} | ~${kb} KB`;
 }
 
 function loadOBJModel(objUrl, mtlUrl) {
@@ -1119,6 +1299,7 @@ function loadOBJModel(objUrl, mtlUrl) {
   const mtlName = mtlUrl.substring(mtlUrl.lastIndexOf('/') + 1);
 
   const mtlLoader = new MTLLoader();
+  mtlLoader.setCrossOrigin('anonymous');
   mtlLoader.setPath(basePath);
   mtlLoader.load(mtlName, materials => {
     materials.preload();
@@ -1131,13 +1312,27 @@ function loadOBJModel(objUrl, mtlUrl) {
   });
 }
 
-// Demo Test Mesh (Test Unity/Unreal export immediately)
+// Local .OBJ opener (works even offline/Vercel without PC engine)
+document.getElementById('localObjInput').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  const obj = new OBJLoader().parse(text);
+  obj.traverse(c => {
+    if (c.isMesh && !c.material) {
+      c.material = new THREE.MeshStandardMaterial({ color: 0xb0bec5, roughness: 0.55 });
+    }
+  });
+  registerModel(obj);
+};
+
+// Demo Test Mesh
 document.getElementById('btnLoadDemo').onclick = () => {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color: 0x00b0ff, roughness: 0.35, metalness: 0.25 });
-  const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.65, 0.22, 128, 24), mat);
+  const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.65, 0.22, 160, 28), mat);
   knot.position.y = 1.0;
-  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.5, 0.15, 32), new THREE.MeshStandardMaterial({ color: 0x455a64 }));
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.5, 0.15, 36), new THREE.MeshStandardMaterial({ color: 0x455a64 }));
   base.position.y = 0.075;
   g.add(knot, base);
   registerModel(g);
@@ -1186,7 +1381,49 @@ function applyTransforms() {
 }
 ['rotX', 'rotY', 'rotZ', 'scaleSlider'].forEach(id => document.getElementById(id).oninput = applyTransforms);
 
-// Real Geometry Floor & Background Cropper
+// --- HIGH-POLY <-> LOW-POLY OPTIMIZER (SimplifyModifier) ---
+const polyKeepSlider = document.getElementById('polyKeepSlider');
+const polyKeepVal = document.getElementById('polyKeepVal');
+polyKeepSlider.oninput = () => { polyKeepVal.textContent = polyKeepSlider.value + '%'; };
+window.setPolyKeep = pct => {
+  polyKeepSlider.value = pct;
+  polyKeepVal.textContent = pct + '%';
+  document.getElementById('btnOptimizePoly').click();
+};
+
+const simplifier = new SimplifyModifier();
+document.getElementById('btnOptimizePoly').onclick = () => {
+  const keepRatio = parseFloat(polyKeepSlider.value) / 100;
+  modelRoot.traverse(c => {
+    if (!c.isMesh) return;
+    const base = originalGeometries.get(c.uuid);
+    if (!base) return;
+    if (keepRatio >= 0.99) {
+      c.geometry.dispose();
+      c.geometry = base.clone();
+      return;
+    }
+    try {
+      let workGeo = base.clone();
+      if (!workGeo.index) workGeo = mergeVertices(workGeo, 1e-4);
+      const totalVerts = workGeo.attributes.position.count;
+      const removeCount = Math.max(0, Math.min(totalVerts - 12, Math.floor(totalVerts * (1 - keepRatio))));
+      if (removeCount > 0) {
+        const simplified = simplifier.modify(workGeo, removeCount);
+        simplified.computeVertexNormals();
+        c.geometry.dispose();
+        c.geometry = simplified;
+      }
+      workGeo.dispose();
+    } catch (err) {
+      console.warn('Simplify fallback:', err);
+    }
+  });
+  groundPivot();
+  updateStats();
+};
+
+// Floor & Background Cropper
 document.getElementById('cropY').oninput = e => document.getElementById('cropYVal').textContent = e.target.value;
 document.getElementById('cropR').oninput = e => document.getElementById('cropRVal').textContent = e.target.value;
 
@@ -1233,7 +1470,7 @@ document.getElementById('btnApplyCrop').onclick = () => {
   updateStats();
 };
 
-// --- UNITY & UNREAL ENGINE EXPORTERS ---
+// --- MULTI-FORMAT EXPORTERS (GLB, GLTF, OBJ, STL, PLY, USDZ, JSON) ---
 function downloadBlob(blob, filename) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1241,20 +1478,50 @@ function downloadBlob(blob, filename) {
   a.click();
 }
 
-function exportGLB(filename) {
+function exportGLTF(filename, binary) {
   setShading('textured');
-  const exporter = new GLTFExporter();
-  exporter.parse(modelRoot, result => {
-    downloadBlob(new Blob([result], { type: 'model/gltf-binary' }), filename);
-  }, err => alert('Export error: ' + err), { binary: true });
+  new GLTFExporter().parse(modelRoot, result => {
+    if (binary) {
+      downloadBlob(new Blob([result], { type: 'model/gltf-binary' }), filename);
+    } else {
+      downloadBlob(new Blob([JSON.stringify(result, null, 2)], { type: 'model/gltf+json' }), filename);
+    }
+  }, err => alert('Export error: ' + err), { binary });
 }
 
-document.getElementById('btnExportUnity').onclick = () => exportGLB('RathoreScan_Unity.glb');
-document.getElementById('btnExportUnreal').onclick = () => exportGLB('RathoreScan_Unreal5.glb');
+document.getElementById('btnExportUnity').onclick = () => exportGLTF('RathoreScan_Unity.glb', true);
+document.getElementById('btnExportUnreal').onclick = () => exportGLTF('RathoreScan_Unreal5.glb', true);
+document.getElementById('btnExportGLTF').onclick = () => exportGLTF('RathoreScan_Asset.gltf', false);
+
 document.getElementById('btnExportOBJ').onclick = () => {
-  const exporter = new OBJExporter();
-  const objText = exporter.parse(modelRoot);
-  downloadBlob(new Blob([objText], { type: 'text/plain' }), 'RathoreScan_Cleaned.obj');
+  const objText = new OBJExporter().parse(modelRoot);
+  downloadBlob(new Blob([objText], { type: 'text/plain' }), 'RathoreScan_Mesh.obj');
+};
+
+document.getElementById('btnExportSTL').onclick = () => {
+  const buf = new STLExporter().parse(modelRoot, { binary: true });
+  downloadBlob(new Blob([buf], { type: 'application/octet-stream' }), 'RathoreScan_3DPrint.stl');
+};
+
+document.getElementById('btnExportPLY').onclick = () => {
+  new PLYExporter().parse(modelRoot, res => {
+    downloadBlob(new Blob([res], { type: 'application/octet-stream' }), 'RathoreScan_Mesh.ply');
+  }, { binary: true });
+};
+
+document.getElementById('btnExportUSDZ').onclick = async () => {
+  try {
+    setShading('textured');
+    const arr = await new USDZExporter().parse(modelRoot, { maxTextureSize: 1024, quickLookCompatible: true });
+    downloadBlob(new Blob([arr], { type: 'model/vnd.usdz+zip' }), 'RathoreScan_AR.usdz');
+  } catch (err) {
+    alert('USDZ export error: ' + err.message);
+  }
+};
+
+document.getElementById('btnExportJSON').onclick = () => {
+  const data = modelRoot.toJSON();
+  downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), 'RathoreScan_ThreeScene.json');
 };
 </script>
 </body>

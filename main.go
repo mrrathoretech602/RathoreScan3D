@@ -1,4 +1,4 @@
-// RathoreScan 3D Studio — Self-Hosted Photogrammetry Server
+// RathoreScan 3D Studio — Self-Hosted Photogrammetry Server & Vercel Mobile Bridge
 // Copyright (c) 2026 RathoreTech (https://github.com/mrrathoretech602/RathoreScan3D)
 // Licensed under the RathoreScan 3D Source-Available & Protected License (see LICENSE).
 
@@ -74,6 +74,12 @@ func getLocalIP() string {
 
 func ensureCert(lanIP string) (string, string) {
 	certFile, keyFile := "cert.pem", "key.pem"
+	if _, err := os.Stat(certFile); err == nil {
+		if _, err := os.Stat(keyFile); err == nil {
+			return certFile, keyFile
+		}
+	}
+
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tmpl := x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
@@ -126,28 +132,103 @@ func (j *JobState) emit(ev JobEvent) {
 	j.mu.Unlock()
 }
 
+func readToolPaths() map[string]string {
+	res := map[string]string{}
+	f, err := os.Open("tools_config.txt")
+	if err != nil {
+		return res
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			res[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+	return res
+}
+
+func toolExists(pathVal, fallbackCmd string) bool {
+	if pathVal != "" {
+		if _, err := os.Stat(pathVal); err == nil {
+			return true
+		}
+	}
+	if fallbackCmd != "" {
+		if _, err := exec.LookPath(fallbackCmd); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	exe := filepath.Join("engine", "scan3d_engine")
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	_, exeErr := os.Stat(exe)
+	cfg := readToolPaths()
+	openmvsOk := false
+	if dir := cfg["OPENMVS_DIR"]; dir != "" {
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			openmvsOk = true
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":        "online",
+		"lan_ip":        getLocalIP(),
+		"engine_ready":  exeErr == nil,
+		"ffmpeg_ready":  toolExists(cfg["FFMPEG_BIN"], "ffmpeg"),
+		"colmap_ready":  toolExists(cfg["COLMAP_BIN"], "colmap"),
+		"openmvs_ready": openmvsOk,
+	})
+}
+
+func sanitizeVideoExt(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp4", ".mov", ".webm", ".mkv", ".avi":
+		return strings.ToLower(filepath.Ext(name))
+	default:
+		return ".mp4"
+	}
+}
+
+func sanitizeImageExt(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".bmp":
+		return strings.ToLower(filepath.Ext(name))
+	default:
+		return ""
+	}
+}
+
 func handleUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	// Allow up to 2GB video stream
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<30)
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	// Allow up to 4GB combined video + multi-photo upload
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<30)
+	if err := r.ParseMultipartForm(128 << 20); err != nil {
 		http.Error(w, "Upload error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	file, header, err := r.FormFile("video")
-	if err != nil {
-		http.Error(w, "Video file missing", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
 	preset := r.FormValue("preset")
 	switch preset {
-	case "fast", "balanced", "ultra":
+	case "lowpoly", "balanced", "highpoly", "ultra":
 	default:
 		preset = "balanced"
 	}
@@ -165,24 +246,65 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	switch ext {
-	case ".mp4", ".mov", ".webm", ".mkv", ".avi":
-	default:
-		ext = ".mp4"
-	}
-	videoPath := filepath.Join(jobDir, "input"+ext)
-	dst, err := os.Create(videoPath)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if _, err := io.Copy(dst, file); err != nil {
+	hasVideo := false
+	videoArg := "none"
+	if file, header, err := r.FormFile("video"); err == nil {
+		defer file.Close()
+		ext := sanitizeVideoExt(header.Filename)
+		videoPath := filepath.Join(jobDir, "input"+ext)
+		dst, err := os.Create(videoPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := io.Copy(dst, file); err != nil {
+			dst.Close()
+			http.Error(w, "Failed to save video", http.StatusInternalServerError)
+			return
+		}
 		dst.Close()
-		http.Error(w, "Failed to save uploaded video", http.StatusInternalServerError)
+		hasVideo = true
+		videoArg = videoPath
+	}
+
+	photoCount := 0
+	if r.MultipartForm != nil && len(r.MultipartForm.File["photos"]) > 0 {
+		rawPhotoDir := filepath.Join(jobDir, "raw_photos")
+		os.MkdirAll(rawPhotoDir, 0755)
+		for i, fh := range r.MultipartForm.File["photos"] {
+			ext := sanitizeImageExt(fh.Filename)
+			if ext == "" {
+				continue
+			}
+			src, err := fh.Open()
+			if err != nil {
+				continue
+			}
+			dstPath := filepath.Join(rawPhotoDir, fmt.Sprintf("photo_%04d%s", i+1, ext))
+			dst, err := os.Create(dstPath)
+			if err != nil {
+				src.Close()
+				continue
+			}
+			io.Copy(dst, src)
+			dst.Close()
+			src.Close()
+			photoCount++
+		}
+	}
+
+	if !hasVideo && photoCount == 0 {
+		os.RemoveAll(jobDir)
+		http.Error(w, "Please upload a 360° video or at least 3 photos.", http.StatusBadRequest)
 		return
 	}
-	dst.Close()
+
+	mode := "video"
+	if hasVideo && photoCount > 0 {
+		mode = "hybrid"
+	} else if photoCount > 0 {
+		mode = "photos"
+	}
 
 	st := &JobState{
 		ID:          jobID,
@@ -193,21 +315,29 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	jobs[jobID] = st
 	jobsMu.Unlock()
 
-	go runPipeline(st, jobDir, videoPath, preset, fps)
+	go runPipeline(st, jobDir, mode, videoArg, preset, fps, photoCount)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"job_id": jobID})
+	json.NewEncoder(w).Encode(map[string]any{
+		"job_id":      jobID,
+		"mode":        mode,
+		"photo_count": photoCount,
+	})
 }
 
-func runPipeline(st *JobState, jobDir, videoPath, preset, fps string) {
-	st.emit(JobEvent{Percent: 2, Message: "Video received! Launching C++17 3D Engine...", Status: "running"})
+func runPipeline(st *JobState, jobDir, mode, videoArg, preset, fps string, photoCount int) {
+	st.emit(JobEvent{
+		Percent: 2,
+		Message: fmt.Sprintf("Input received (mode=%s, photos=%d, preset=%s). Starting C++17 Engine...", mode, photoCount, preset),
+		Status:  "running",
+	})
 
 	exe := filepath.Join("engine", "scan3d_engine")
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}
 
-	cmd := exec.Command(exe, jobDir, videoPath, preset, fps)
+	cmd := exec.Command(exe, jobDir, mode, videoArg, preset, fps)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		st.emit(JobEvent{Percent: 0, Message: "Engine pipe error: " + err.Error(), Status: "error"})
@@ -326,11 +456,27 @@ func handleListJobs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-func withSecurityHeaders(next http.Handler) http.Handler {
+func withSecurityAndCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+		w.Header().Set("Access-Control-Allow-Private-Network", "true")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -343,18 +489,21 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir("web")))
 	mux.Handle("/jobs/", http.StripPrefix("/jobs/", http.FileServer(http.Dir("jobs"))))
+	mux.HandleFunc("/api/health", handleHealth)
 	mux.HandleFunc("/api/upload", handleUpload)
 	mux.HandleFunc("/api/events", handleEvents)
 	mux.HandleFunc("/api/jobs", handleListJobs)
-	handler := withSecurityHeaders(mux)
+	handler := withSecurityAndCORS(mux)
 
-	fmt.Println("====================================================")
-	fmt.Println("   RATHORESCAN 3D STUDIO - ANDROID + PC SERVER")
-	fmt.Println("====================================================")
-	fmt.Printf(" PC Local URL   : http://localhost:8080\n")
-	fmt.Printf(" Android Camera : https://%s:8443  (Accept self-signed warning once)\n", lanIP)
-	fmt.Printf(" Android Simple : http://%s:8080   (Use Native 4K Camera button)\n", lanIP)
-	fmt.Println("====================================================")
+	fmt.Println("================================================================")
+	fmt.Println("   RATHORESCAN 3D STUDIO - PC APP + LIVE VERCEL MOBILE BRIDGE")
+	fmt.Println("================================================================")
+	fmt.Printf(" PC Desktop App : http://localhost:8080\n")
+	fmt.Printf(" Mobile Wi-Fi   : https://%s:8443\n", lanIP)
+	fmt.Printf(" Vercel Bridge  : https://rathorescan3d.vercel.app/?server=https://%s:8443\n", lanIP)
+	fmt.Println(" Tip (4G/5G): Run `cloudflared tunnel --url http://localhost:8080`")
+	fmt.Println("              and open https://rathorescan3d.vercel.app/?server=<tunnel-url>")
+	fmt.Println("================================================================")
 
 	go func() {
 		log.Fatal(http.ListenAndServe(":8080", handler))

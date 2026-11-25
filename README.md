@@ -38,12 +38,13 @@ RathoreScan3D/
    - **OpenMVS** (Windows binaries from GitHub `cdcseacave/openMVS`)
 3. Open `tools_config.txt` and update the 3 paths to match your PC folders.
 
-## Run on PC, Tablet & Android
-- Double-click **`build_and_run.bat`** (or run `g++ -O3 -std=c++17 engine/scan3d_engine.cpp -o engine/scan3d_engine.exe` and then `go run main.go`).
-- **PC Browser:** Open `http://localhost:8080`
-- **Android Phone / Tablet (Same Wi-Fi / Hotspot):**
-  - Open the HTTPS URL printed in the terminal (e.g., `https://192.168.1.x:8443`), accept the local self-signed certificate once, and tap **Install App / Add to Home Screen**.
-  - Or open `http://192.168.1.x:8080` and use the **Record Native 4K Video / Pick File** button.
+## Run on PC Desktop App, Tablet & Mobile (Vercel Bridge)
+- Double-click **`build_and_run.bat`** — it compiles `engine/scan3d_engine.exe`, starts the Go Photogrammetry Server, and opens a **Windows Desktop App** window automatically.
+- **Input Modes:** Shoot a 360° video, snap/upload **100+ multi-angle photos**, or combine both (Hybrid mode) for higher accuracy.
+- **Poly-Budget Presets:** Choose **Low-Poly Fast** (`1024px`, tiny file size), **Balanced Game-Ready** (`1440px`), **High-Poly Detail** (`1920px`), or **Ultra Photorealistic** (`2400px`), plus live client-side **High-Poly ↔ Low-Poly Simplifier** in 3D Studio.
+- **Multi-Format Exports:** `.GLB` (Unity / Unreal Engine 5), `.GLTF`, `.OBJ`, `.STL` (3D Print), `.PLY`, `.USDZ` (iOS AR), and `.JSON`.
+- **Live Mobile on Vercel (`rathorescan3d.vercel.app`):**
+  - Open `https://rathorescan3d.vercel.app/?server=https://<YOUR_PC_LAN_IP>:8443` (same Wi-Fi) or use a Cloudflare HTTPS tunnel (`cloudflared tunnel --url http://localhost:8080`) for 4G/5G mobile uploads directly to your laptop GPU!
 
 ## Deploying Frontend to Vercel
 `vercel.json` automatically configures Vercel to serve the responsive PWA & 3D Studio (`web/`) with strict HTTP security headers:
