@@ -163,9 +163,16 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	fpsInt, err := strconv.Atoi(r.FormValue("fps"))
 	if err != nil || fpsInt < 1 || fpsInt > 10 {
-		fpsInt = 2
+		fpsInt = 3
 	}
 	fps := strconv.Itoa(fpsInt)
+
+	sceneMode := r.FormValue("scene_mode")
+	switch sceneMode {
+	case "auto", "subject", "full":
+	default:
+		sceneMode = "auto"
+	}
 
 	jobID := fmt.Sprintf("scan_%d", time.Now().Unix())
 	jobDir := filepath.Join("jobs", jobID)
@@ -243,20 +250,21 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	jobs[jobID] = st
 	jobsMu.Unlock()
 
-	go runPipeline(st, jobDir, mode, videoArg, preset, fps, photoCount)
+	go runPipeline(st, jobDir, mode, videoArg, preset, fps, sceneMode, photoCount)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"job_id":      jobID,
 		"mode":        mode,
+		"scene_mode":  sceneMode,
 		"photo_count": photoCount,
 	})
 }
 
-func runPipeline(st *JobState, jobDir, mode, videoArg, preset, fps string, photoCount int) {
+func runPipeline(st *JobState, jobDir, mode, videoArg, preset, fps, sceneMode string, photoCount int) {
 	st.emit(JobEvent{
 		Percent: 2,
-		Message: fmt.Sprintf("Input received (mode=%s, photos=%d, preset=%s). Starting C++17 Engine...", mode, photoCount, preset),
+		Message: fmt.Sprintf("Input received (mode=%s, photos=%d, preset=%s, focus=%s). Starting C++17 Engine...", mode, photoCount, preset, sceneMode),
 		Status:  "running",
 	})
 
@@ -265,7 +273,7 @@ func runPipeline(st *JobState, jobDir, mode, videoArg, preset, fps string, photo
 		exe += ".exe"
 	}
 
-	cmd := exec.Command(exe, jobDir, mode, videoArg, preset, fps)
+	cmd := exec.Command(exe, jobDir, mode, videoArg, preset, fps, sceneMode)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		st.emit(JobEvent{Percent: 0, Message: "Engine pipe error: " + err.Error(), Status: "error"})

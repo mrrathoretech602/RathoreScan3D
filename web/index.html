@@ -862,11 +862,21 @@
               <label for="fpsSel">Video Frame Rate (Video Mode)</label>
               <select id="fpsSel">
                 <option value="1">1 FPS (Long Video 60s+)</option>
-                <option value="2" selected>2 FPS (Standard 30s Video)</option>
-                <option value="3">3 FPS (Short 15s Video)</option>
-                <option value="4">4 FPS (Fast / Ultra Dense)</option>
+                <option value="2">2 FPS (Standard 30s Video)</option>
+                <option value="3" selected>3 FPS (Recommended 15-30s)</option>
+                <option value="4">4 FPS (Short 10-15s Video)</option>
+                <option value="5">5 FPS (Max Overlap 10s Clip)</option>
               </select>
             </div>
+          </div>
+
+          <div>
+            <label for="sceneModeSel">Scene Focus (Background Handling)</label>
+            <select id="sceneModeSel">
+              <option value="auto" selected>Smart Auto (Tries Full Scene, Auto-Masks BG if Needed)</option>
+              <option value="subject">Object / Person Focus (Mask Out Blurred/Static BG)</option>
+              <option value="full">Full Room / Outdoor Environment (No Mask)</option>
+            </select>
           </div>
 
           <div class="row">
@@ -1326,6 +1336,7 @@ btnBuild3D.onclick = () => {
   selectedPhotos.forEach(p => fd.append('photos', p));
   fd.append('preset', document.getElementById('presetSel').value);
   fd.append('fps', document.getElementById('fpsSel').value);
+  fd.append('scene_mode', document.getElementById('sceneModeSel').value);
 
   switchTab('build');
   buildDot.classList.add('live');
