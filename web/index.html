@@ -1006,10 +1006,14 @@ btnBuild3D.onclick = async () => {
 };
 
 async function loadHistory() {
+  const el = document.getElementById('scanHistory');
   try {
     const res = await fetch('/api/jobs');
+    if (!res.ok) {
+      el.innerHTML = '<span style="font-size:0.78rem;color:var(--muted)">Preview mode — run local PC Go engine to build &amp; list 3D scans.</span>';
+      return;
+    }
     const items = await res.json() || [];
-    const el = document.getElementById('scanHistory');
     el.innerHTML = items.length ? '' : '<span style="font-size:0.78rem;color:var(--muted)">No previous scans yet.</span>';
     items.reverse().forEach(it => {
       const div = document.createElement('div');
@@ -1022,7 +1026,9 @@ async function loadHistory() {
       };
       el.appendChild(div);
     });
-  } catch {}
+  } catch {
+    el.innerHTML = '<span style="font-size:0.78rem;color:var(--muted)">Preview mode — run local PC Go engine to build &amp; list 3D scans.</span>';
+  }
 }
 loadHistory();
 

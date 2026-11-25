@@ -1,0 +1,10 @@
+# Exclude local Go & C++17 PC engine files so Vercel deploys static web/ PWA only
+main.go
+go.mod
+engine/
+jobs/
+build_and_run.bat
+tools_config.txt
+*.exe
+*.pem
+*.key
