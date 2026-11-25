@@ -1006,11 +1006,23 @@ const serverUrlInput = document.getElementById('serverUrlInput');
 const enginePill = document.getElementById('enginePill');
 const enginePillText = document.getElementById('enginePillText');
 const healthChips = document.getElementById('healthChips');
+const bridgeInputs = document.querySelector('.bridge-inputs');
+
+const isLocalHostApp = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname) ||
+  /^(192\.168\.|10\.|172\.)/.test(window.location.hostname);
 
 const qpServer = new URLSearchParams(window.location.search).get('server');
-let serverBase = (qpServer || localStorage.getItem('rathorescan_server') || '').replace(/\/+$/, '');
-if (qpServer) localStorage.setItem('rathorescan_server', serverBase);
-serverUrlInput.value = serverBase;
+let serverBase = '';
+if (isLocalHostApp) {
+  // Always talk directly to same-origin PC/LAN server when running locally
+  localStorage.removeItem('rathorescan_server');
+  serverBase = '';
+  if (bridgeInputs) bridgeInputs.style.display = 'none';
+} else {
+  serverBase = (qpServer || localStorage.getItem('rathorescan_server') || '').replace(/\/+$/, '');
+  if (qpServer) localStorage.setItem('rathorescan_server', serverBase);
+  serverUrlInput.value = serverBase;
+}
 
 function apiUrl(path) {
   return serverBase ? `${serverBase}${path}` : path;
@@ -1024,17 +1036,18 @@ async function checkEngineHealth() {
     enginePill.className = 'conn-pill ok';
     enginePillText.textContent = serverBase ? 'Remote PC Online' : 'PC Engine Online';
     const chip = (label, ok) => `<span class="mini-chip ${ok ? 'ok' : 'err'}">${label}: ${ok ? 'OK' : 'Missing'}</span>`;
+    const mobileHttp = h.mobile_http_url || `http://${h.lan_ip}:8080`;
     healthChips.innerHTML =
       chip('Go Server', true) +
       chip('C++ Engine', h.engine_ready) +
       chip('FFmpeg', h.ffmpeg_ready) +
       chip('COLMAP', h.colmap_ready) +
       chip('OpenMVS', h.openmvs_ready) +
-      (h.vercel_bridge_url ? `<button class="btn sec sm" type="button" onclick="navigator.clipboard?.writeText('${h.vercel_bridge_url}').then(()=>alert('Copied Mobile Vercel Link!\\nOpen on Phone (same Wi-Fi):\\n${h.vercel_bridge_url}'))">Copy Mobile Link (${h.lan_ip})</button>` : '');
+      `<button class="btn sec sm" type="button" onclick="navigator.clipboard?.writeText('${mobileHttp}').then(()=>alert('Copied Phone Wi-Fi URL!\\nOpen this in Mobile Browser (same Wi-Fi):\\n${mobileHttp}'))">Phone Wi-Fi Link: ${mobileHttp}</button>`;
   } catch {
     enginePill.className = 'conn-pill warn';
     enginePillText.textContent = 'Preview Mode';
-    healthChips.innerHTML = '<span class="mini-chip">Vercel Preview — Enter Laptop Server URL above to process on PC</span>';
+    healthChips.innerHTML = '<span class="mini-chip">Vercel Preview — Enter HTTPS Tunnel URL (e.g. Cloudflare Tunnel) or open Phone Wi-Fi URL directly</span>';
   }
 }
 

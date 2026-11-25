@@ -186,6 +186,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":            "online",
 		"lan_ip":            lanIP,
+		"mobile_http_url":   fmt.Sprintf("http://%s:8080", lanIP),
 		"mobile_lan_url":    fmt.Sprintf("https://%s:8443", lanIP),
 		"vercel_bridge_url": fmt.Sprintf("https://rathorescan3d.vercel.app/?server=https://%s:8443", lanIP),
 		"engine_ready":      exeErr == nil,

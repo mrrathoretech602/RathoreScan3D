@@ -116,6 +116,19 @@ int main(int argc, char* argv[]) {
         ? loadConfig("tools_config.txt")
         : loadConfig("../tools_config.txt");
 
+    if (cfg.ffmpeg != "ffmpeg" && !fs::exists(cfg.ffmpeg)) {
+        std::cerr << "[ERROR] FFmpeg not found at: " << cfg.ffmpeg << " (Update tools_config.txt)\n";
+        return 2;
+    }
+    if (cfg.colmap != "colmap" && !fs::exists(cfg.colmap)) {
+        std::cerr << "[ERROR] COLMAP not found at: " << cfg.colmap << " (Update tools_config.txt)\n";
+        return 3;
+    }
+    if (!cfg.openmvsDir.empty() && !fs::exists(cfg.openmvsDir)) {
+        std::cerr << "[ERROR] OpenMVS folder not found at: " << cfg.openmvsDir << " (Update tools_config.txt)\n";
+        return 8;
+    }
+
     // Poly-Budget & Quality Presets (Optimized for speed, small size, and VRAM safety)
     int maxImgSize = 1440;
     int mvsResLevel = 2;
