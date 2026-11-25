@@ -426,6 +426,24 @@ int main(int argc, char* argv[]) {
         return 11;
     }
 
+    // Fix OpenMVS MTL quirk: replace "Tr 1.000000" (treated as 100% transparent by Three.js/glTF) with "d 1.000000"
+    fs::path finalMtl = outDir / "model.mtl";
+    if (fs::exists(finalMtl)) {
+        std::ifstream mtlIn(finalMtl);
+        std::ostringstream mtlBuf;
+        std::string line;
+        while (std::getline(mtlIn, line)) {
+            if (line.rfind("Tr ", 0) == 0) {
+                mtlBuf << "d 1.000000\n";
+            } else {
+                mtlBuf << line << "\n";
+            }
+        }
+        mtlIn.close();
+        std::ofstream mtlOut(finalMtl, std::ios::trunc);
+        mtlOut << mtlBuf.str();
+    }
+
     logProgress(100, "3D Model Ready! Loading in Studio...");
     return 0;
 }

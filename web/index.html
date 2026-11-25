@@ -1505,6 +1505,25 @@ function fitCameraToModel() {
   controls.update();
 }
 
+function sanitizeLoadedMaterial(mat) {
+  if (!mat) return new THREE.MeshStandardMaterial({ color: 0xb0bec5, roughness: 0.55, side: THREE.DoubleSide });
+  const list = Array.isArray(mat) ? mat : [mat];
+  list.forEach(m => {
+    m.side = THREE.DoubleSide;
+    // OpenMVS writes "Tr 1.0" which MTLLoader reads as opacity 0 (invisible)
+    if (m.opacity !== undefined && m.opacity <= 0.01) {
+      m.opacity = 1.0;
+      m.transparent = false;
+    }
+    if (m.map) {
+      m.map.colorSpace = THREE.SRGBColorSpace;
+      m.map.needsUpdate = true;
+    }
+    m.needsUpdate = true;
+  });
+  return mat;
+}
+
 function registerModel(obj) {
   modelRoot.clear();
   originalGeometries.clear();
@@ -1519,8 +1538,26 @@ function registerModel(obj) {
   document.getElementById('polyKeepSlider').value = 100;
   document.getElementById('polyKeepVal').textContent = '100%';
 
+  // Center & normalize geometry around local ground-origin (0,0,0) so rotation/scale pivots cleanly
+  obj.updateMatrixWorld(true);
+  const rawBox = new THREE.Box3().setFromObject(obj);
+  if (!rawBox.isEmpty()) {
+    const rawSize = rawBox.getSize(new THREE.Vector3());
+    const rawCenter = rawBox.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(rawSize.x, rawSize.y, rawSize.z, 0.001);
+    const normFactor = (maxDim > 8 || maxDim < 0.25) ? (2.4 / maxDim) : 1.0;
+    obj.traverse(c => {
+      if (c.isMesh && c.geometry) {
+        c.geometry.translate(-rawCenter.x, -rawBox.min.y, -rawCenter.z);
+        if (normFactor !== 1.0) c.geometry.scale(normFactor, normFactor, normFactor);
+        if (!c.geometry.attributes.normal) c.geometry.computeVertexNormals();
+      }
+    });
+  }
+
   obj.traverse(c => {
     if (c.isMesh) {
+      c.material = sanitizeLoadedMaterial(c.material);
       originalGeometries.set(c.uuid, c.geometry.clone());
       originalMaterials.set(c.uuid, c.material);
     }
