@@ -1,0 +1,34 @@
+# Compiled binaries & build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+engine/scan3d_engine
+
+# Local TLS certificates & secrets (NEVER commit)
+*.pem
+*.key
+*.crt
+.env
+.env.*
+
+# Generated scan jobs & large media
+jobs/*
+!jobs/.gitkeep
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.avi
+*.obj
+*.mtl
+*.ply
+*.mvs
+*.db
+
+# OS / IDE / Vercel artifacts
+.DS_Store
+Thumbs.db
+.vercel
+.vscode/
+.idea/

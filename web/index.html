@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>RathoreScan 3D Studio — Mobile, Tablet & PC</title>
+<link rel="manifest" href="/manifest.json" />
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+<link rel="apple-touch-icon" href="/icon-192.png" />
+<meta name="theme-color" content="#0b0e14" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Scan3D" />
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #131823;
+    --panel-elev: #192131;
+    --border: #232c3d;
+    --accent: #00e5ff;
+    --accent2: #7c4dff;
+    --text: #e8edf5;
+    --muted: #8b9bb4;
+    --ok: #00e676;
+    --warn: #ffb300;
+    --err: #ff5252;
+    --radius: 14px;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body {
+    height: 100%;
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  body {
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+  }
+
+  /* --- APP HEADER (PC, LAPTOP, TABLET & MOBILE TOP BAR) --- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: calc(10px + var(--safe-top)) calc(14px + var(--safe-right)) 10px calc(14px + var(--safe-left));
+    background: rgba(19, 24, 35, 0.94);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    z-index: 20;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .brand-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    border: 1px solid rgba(0, 229, 255, 0.35);
+  }
+
+  .logo {
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    font-size: clamp(0.95rem, 1.5vw, 1.1rem);
+    color: var(--accent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .logo span {
+    color: var(--text);
+    font-weight: 400;
+    font-size: 0.8rem;
+    margin-left: 6px;
+    opacity: 0.7;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  nav.top-nav {
+    display: flex;
+    gap: 6px;
+    background: #0d121c;
+    padding: 4px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+
+  nav.top-nav button {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    padding: 8px 14px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.84rem;
+    white-space: nowrap;
+    transition: background 0.18s, color 0.18s;
+    touch-action: manipulation;
+  }
+
+  nav.top-nav button:hover {
+    color: var(--text);
+  }
+
+  nav.top-nav button.active {
+    background: var(--accent);
+    color: #050a10;
+  }
+
+  #btnInstallApp {
+    display: none;
+    background: rgba(0, 229, 255, 0.14);
+    color: var(--accent);
+    border: 1px solid rgba(0, 229, 255, 0.45);
+    padding: 7px 12px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    touch-action: manipulation;
+  }
+
+  /* --- MAIN SCROLL & TAB CONTAINERS --- */
+  main {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .tab {
+    display: none;
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: clamp(12px, 2vw, 22px);
+    padding-left: calc(clamp(12px, 2vw, 22px) + var(--safe-left));
+    padding-right: calc(clamp(12px, 2vw, 22px) + var(--safe-right));
+  }
+
+  .tab.active {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .tab-inner {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 16px;
+    align-items: start;
+  }
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: clamp(14px, 2vw, 18px);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .card h3 {
+    font-size: 0.9rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+
+  /* --- CAMERA PREVIEW --- */
+  .cam-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    max-height: 52dvh;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .ar-ring {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .ar-ring svg {
+    width: min(62%, 240px);
+    height: min(62%, 240px);
+    opacity: 0.88;
+  }
+
+  .hud-badge {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    width: fit-content;
+    max-width: calc(100% - 20px);
+    background: rgba(5, 8, 14, 0.72);
+    backdrop-filter: blur(6px);
+    padding: 5px 11px;
+    border-radius: 20px;
+    font-size: 0.76rem;
+    border: 1px solid rgba(0, 229, 255, 0.65);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* --- BUTTONS & FORM INPUTS --- */
+  .btn {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #fff;
+    border: none;
+    padding: 11px 16px;
+    min-height: 44px;
+    border-radius: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 0.88rem;
+    text-align: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    touch-action: manipulation;
+    transition: transform 0.1s, opacity 0.15s;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .btn.sec {
+    background: #1e2738;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .btn.danger { background: var(--err); }
+  .btn.ok { background: var(--ok); color: #05150a; }
+  .btn:disabled { opacity: 0.42; cursor: not-allowed; }
+
+  .row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .row-actions > .btn {
+    flex: 1 1 140px;
+  }
+
+  select {
+    background: #0d121c;
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    min-height: 44px;
+    border-radius: 9px;
+    width: 100%;
+    font-size: 0.86rem;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 8px;
+    background: #0d121c;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    outline: none;
+    margin: 6px 0 8px;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid #0b0e14;
+    cursor: pointer;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid #0b0e14;
+    cursor: pointer;
+  }
+
+  label {
+    font-size: 0.79rem;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  /* --- BUILD MONITOR --- */
+  .progress-bar {
+    width: 100%;
+    height: 14px;
+    background: #0d121c;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--ok));
+    transition: width 0.3s;
+  }
+
+  #consoleLog {
+    background: #06090f;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    font-family: Consolas, ui-monospace, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: #9ef0ff;
+    height: clamp(220px, 48dvh, 480px);
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* --- 3D STUDIO LAYOUT (PC / LAPTOP / TABLET / MOBILE) --- */
+  #tab-studio {
+    padding: 0;
+    flex-direction: row;
+    overflow: hidden;
+  }
+
+  #viewport {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    position: relative;
+    background: radial-gradient(circle at center, #1b2436 0%, #090c12 100%);
+    touch-action: none;
+  }
+
+  #viewport canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+  }
+
+  #studioSidebar {
+    width: 340px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    padding: 14px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .studio-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .studio-divider {
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+
+  .stats-pill {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    max-width: calc(100% - 24px);
+    background: rgba(11, 14, 20, 0.82);
+    backdrop-filter: blur(6px);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 0.76rem;
+    border: 1px solid var(--border);
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 5;
+  }
+
+  .scan-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 11px;
+    background: #0e1420;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+
+  .scan-item span {
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* --- MOBILE APP BOTTOM NAVIGATION BAR --- */
+  nav.bottom-nav {
+    display: none;
+    background: rgba(19, 24, 35, 0.96);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid var(--border);
+    padding: 6px calc(10px + var(--safe-right)) calc(6px + var(--safe-bottom)) calc(10px + var(--safe-left));
+    flex-shrink: 0;
+    z-index: 30;
+  }
+
+  nav.bottom-nav button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 4px;
+    min-height: 50px;
+    border-radius: 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    position: relative;
+    touch-action: manipulation;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  nav.bottom-nav button svg {
+    width: 21px;
+    height: 21px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  nav.bottom-nav button.active {
+    color: var(--accent);
+    background: rgba(0, 229, 255, 0.1);
+  }
+
+  .nav-dot {
+    display: none;
+    position: absolute;
+    top: 6px;
+    right: calc(50% - 16px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 8px var(--ok);
+  }
+
+  .nav-dot.live { display: block; }
+
+  /* --- TABLET BREAKPOINT (641px - 1024px) --- */
+  @media (max-width: 1024px) {
+    .grid-2 {
+      grid-template-columns: 1fr;
+    }
+
+    #studioSidebar {
+      width: 295px;
+    }
+  }
+
+  @media (max-width: 860px) {
+    #tab-studio {
+      flex-direction: column;
+    }
+
+    #viewport {
+      flex: none;
+      height: 50dvh;
+      min-height: 240px;
+    }
+
+    #studioSidebar {
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+      border-left: none;
+      border-top: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px 16px;
+      align-content: start;
+    }
+
+    #studioSidebar .studio-full {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* --- MOBILE PHONE APP MODE (<= 640px) --- */
+  @media (max-width: 640px) {
+    header {
+      padding: calc(8px + var(--safe-top)) calc(12px + var(--safe-right)) 8px calc(12px + var(--safe-left));
+    }
+
+    .logo span {
+      display: none;
+    }
+
+    nav.top-nav {
+      display: none;
+    }
+
+    nav.bottom-nav {
+      display: flex;
+      gap: 6px;
+    }
+
+    .tab {
+      padding: 10px 12px 18px;
+    }
+
+    .card {
+      border-radius: 12px;
+      padding: 13px;
+      gap: 10px;
+    }
+
+    .cam-wrap {
+      aspect-ratio: 4 / 3;
+      max-height: 38dvh;
+    }
+
+    .form-grid {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    #viewport {
+      height: 44dvh;
+      min-height: 220px;
+    }
+
+    #studioSidebar {
+      grid-template-columns: 1fr;
+      padding: 12px 12px 20px;
+      gap: 11px;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      width: 24px;
+      height: 24px;
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 24px;
+      height: 24px;
+    }
+  }
+
+  /* --- SHORT LANDSCAPE PHONES --- */
+  @media (max-height: 520px) and (orientation: landscape) {
+    #tab-studio {
+      flex-direction: row;
+    }
+
+    #viewport {
+      height: 100%;
+      flex: 1;
+    }
+
+    #studioSidebar {
+      width: 270px;
+      height: 100%;
+      flex: none;
+      grid-template-columns: 1fr;
+      border-top: none;
+      border-left: 1px solid var(--border);
+    }
+
+    .cam-wrap {
+      max-height: 58dvh;
+    }
+  }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <img src="/icon-192.png" alt="Scan3D" class="brand-icon" />
+    <div class="logo">RATHORESCAN 3D <span>Mobile, Tablet &amp; PC Studio</span></div>
+  </div>
+  <div class="header-actions">
+    <button id="btnInstallApp">Install App</button>
+    <nav class="top-nav" aria-label="Primary Navigation">
+      <button class="active" data-tab="capture" onclick="switchTab('capture')">1. Capture</button>
+      <button data-tab="build" onclick="switchTab('build')">2. Build Engine</button>
+      <button data-tab="studio" onclick="switchTab('studio')">3. 3D Studio &amp; Export</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- TAB 1: CAPTURE -->
+  <section id="tab-capture" class="tab active">
+    <div class="tab-inner">
+      <div class="grid-2">
+        <div class="card">
+          <h3>360° Live Camera Guide</h3>
+          <div class="cam-wrap">
+            <video id="camPreview" autoplay playsinline muted></video>
+            <div class="ar-ring">
+              <svg viewBox="0 0 200 200">
+                <circle cx="100" cy="100" r="82" fill="none" stroke="#00e5ff" stroke-width="2" stroke-dasharray="8 6"/>
+                <circle id="progressRing" cx="100" cy="100" r="82" fill="none" stroke="#00e676" stroke-width="5"
+                  stroke-dasharray="515" stroke-dashoffset="515" transform="rotate(-90 100 100)"/>
+                <line x1="90" y1="100" x2="110" y2="100" stroke="#00e5ff" stroke-width="1.5"/>
+                <line x1="100" y1="90" x2="100" y2="110" stroke="#00e5ff" stroke-width="1.5"/>
+              </svg>
+            </div>
+            <div class="hud-badge" id="camStatus">Camera Standby</div>
+          </div>
+          <div class="row row-actions">
+            <button class="btn sec" id="btnStartCam">Open Camera</button>
+            <button class="btn" id="btnRec" disabled>Start 360° Record</button>
+            <button class="btn danger" id="btnStopRec" disabled>Stop &amp; Use Video</button>
+          </div>
+          <p style="font-size:0.78rem; color:var(--muted); line-height:1.45;">
+            Tip: Object ke charo taraf <b>slowly 2 circles</b> ghumo (1 eye-level, 1 high-angle, ~25-40 sec video). Shadows soft rakho.
+          </p>
+        </div>
+
+        <div class="card">
+          <h3>Native 4K Camera / Video Upload</h3>
+          <p style="font-size:0.82rem; color:var(--muted); line-height:1.45;">
+            Best sharp quality (OIS + 4K) ke liye phone ka native camera use karo ya existing video select karo:
+          </p>
+          <input type="file" id="fileInput" accept="video/*" capture="environment" style="display:none" />
+          <button class="btn sec" style="width:100%;" onclick="document.getElementById('fileInput').click()">
+            Record Native 4K Video / Pick File
+          </button>
+          <div id="selectedInfo" style="font-size:0.82rem; color:var(--ok);">No video selected yet.</div>
+
+          <div class="form-grid">
+            <div>
+              <label for="presetSel">Reconstruction Quality</label>
+              <select id="presetSel">
+                <option value="fast">Fast Preview (1280px, ~3 min)</option>
+                <option value="balanced" selected>Game Ready (1600px, 4GB VRAM Safe)</option>
+                <option value="ultra">Ultra Detail + Refine (2048px)</option>
+              </select>
+            </div>
+            <div>
+              <label for="fpsSel">Frame Extraction Rate</label>
+              <select id="fpsSel">
+                <option value="1">1 FPS (Long Video 60s+)</option>
+                <option value="2" selected>2 FPS (Standard 30s Video)</option>
+                <option value="3">3 FPS (Short 15s Video)</option>
+              </select>
+            </div>
+          </div>
+
+          <button class="btn ok" style="width:100%;" id="btnBuild3D" disabled>Build 3D Model on PC Engine</button>
+
+          <h3 style="margin-top:4px;">Recent Scans</h3>
+          <div id="scanHistory" style="display:flex; flex-direction:column; gap:6px;"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 2: BUILD MONITOR -->
+  <section id="tab-build" class="tab">
+    <div class="tab-inner">
+      <div class="card">
+        <h3>Live C++17 Photogrammetry Pipeline</h3>
+        <div class="row" style="justify-content:space-between;">
+          <span id="stageLabel" style="font-weight:700; font-size:0.9rem;">Waiting for job...</span>
+          <span id="pctLabel" style="color:var(--accent); font-weight:800;">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div id="consoleLog">Ready. Upload or record a 360° video to begin reconstruction...</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 3: 3D STUDIO & UNITY/UNREAL EXPORTER -->
+  <section id="tab-studio" class="tab">
+    <div id="viewport">
+      <div class="stats-pill" id="meshStats">No Model Loaded</div>
+    </div>
+    <aside id="studioSidebar">
+      <div class="row studio-full" style="justify-content:space-between;">
+        <h3 style="color:var(--accent); font-size:0.9rem;">3D Studio Inspector</h3>
+        <button class="btn sec" style="min-height:36px; padding:5px 11px; font-size:0.76rem;" id="btnLoadDemo">Load Test Mesh</button>
+      </div>
+
+      <div class="studio-section">
+        <label>Shading Mode</label>
+        <div class="row">
+          <button class="btn sec" style="flex:1; min-height:38px; padding:7px;" onclick="setShading('textured')">Textured</button>
+          <button class="btn sec" style="flex:1; min-height:38px; padding:7px;" onclick="setShading('clay')">Clay</button>
+          <button class="btn sec" style="flex:1; min-height:38px; padding:7px;" onclick="setShading('wire')">Wire</button>
+        </div>
+      </div>
+
+      <div class="studio-section">
+        <label>Quick Orientation &amp; Pivot Fix</label>
+        <div class="row">
+          <button class="btn sec" style="flex:1; min-height:38px; padding:8px; font-size:0.78rem;" id="btnFixAxis">Flip Y-Up</button>
+          <button class="btn sec" style="flex:1; min-height:38px; padding:8px; font-size:0.78rem;" id="btnGroundPivot">Ground Pivot</button>
+        </div>
+      </div>
+
+      <div class="studio-section">
+        <label>Rotate X / Y / Z (<span id="rotVal">0°, 0°, 0°</span>)</label>
+        <input type="range" id="rotX" min="-180" max="180" value="0" />
+        <input type="range" id="rotY" min="-180" max="180" value="0" />
+        <input type="range" id="rotZ" min="-180" max="180" value="0" />
+      </div>
+
+      <div class="studio-section">
+        <label>Uniform Scale (<span id="scaleVal">1.00x</span>)</label>
+        <input type="range" id="scaleSlider" min="0.1" max="5" step="0.05" value="1" />
+      </div>
+
+      <div class="studio-section studio-divider">
+        <label style="color:var(--warn); font-weight:700;">Floor &amp; Background Cropper (Destructive Trim)</label>
+        <label>Cut Floor Height Y (<span id="cropYVal">-5.0</span>)</label>
+        <input type="range" id="cropY" min="-5" max="5" step="0.05" value="-5" />
+        <label>Trim Outer Radius (<span id="cropRVal">20.0</span>)</label>
+        <input type="range" id="cropR" min="0.5" max="20" step="0.1" value="20" />
+        <button class="btn sec" style="width:100%; margin-top:4px;" id="btnApplyCrop">Apply Crop &amp; Clean Mesh</button>
+      </div>
+
+      <div class="studio-section studio-divider studio-full">
+        <label style="color:var(--ok); font-weight:700;">Export Game-Ready Asset</label>
+        <button class="btn ok" style="width:100%;" id="btnExportUnity">Export for Unity (.GLB)</button>
+        <button class="btn" style="width:100%;" id="btnExportUnreal">Export for Unreal Engine 5 (.GLB)</button>
+        <button class="btn sec" style="width:100%;" id="btnExportOBJ">Export Cleaned Mesh (.OBJ)</button>
+      </div>
+    </aside>
+  </section>
+</main>
+
+<!-- MOBILE APP BOTTOM NAVIGATION -->
+<nav class="bottom-nav" aria-label="Mobile Navigation">
+  <button class="active" data-tab="capture" onclick="switchTab('capture')">
+    <svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    <span>Capture</span>
+  </button>
+  <button data-tab="build" onclick="switchTab('build')">
+    <span class="nav-dot" id="buildDot"></span>
+    <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+    <span>Build</span>
+  </button>
+  <button data-tab="studio" onclick="switchTab('studio')">
+    <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+    <span>3D Studio</span>
+  </button>
+</nav>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
+
+// --- PWA SERVICE WORKER & INSTALL PROMPT ---
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+let deferredPrompt = null;
+const btnInstallApp = document.getElementById('btnInstallApp');
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  btnInstallApp.style.display = 'inline-flex';
+});
+btnInstallApp.onclick = async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  await deferredPrompt.userChoice;
+  deferredPrompt = null;
+  btnInstallApp.style.display = 'none';
+};
+
+// --- TAB NAVIGATION (SYNC TOP & MOBILE BOTTOM NAV) ---
+window.switchTab = name => {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button[data-tab]').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === name);
+  });
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'studio') requestAnimationFrame(resizeRenderer);
+};
+
+// --- CAMERA & VIDEO CAPTURE ---
+let mediaStream = null, recorder = null, chunks = [], selectedBlob = null, recTimer = null, recSec = 0;
+const camPreview = document.getElementById('camPreview');
+const camStatus = document.getElementById('camStatus');
+const btnStartCam = document.getElementById('btnStartCam');
+const btnRec = document.getElementById('btnRec');
+const btnStopRec = document.getElementById('btnStopRec');
+const btnBuild3D = document.getElementById('btnBuild3D');
+const selectedInfo = document.getElementById('selectedInfo');
+const progressRing = document.getElementById('progressRing');
+const buildDot = document.getElementById('buildDot');
+
+btnStartCam.onclick = async () => {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+    camPreview.srcObject = mediaStream;
+    camStatus.textContent = 'Camera Ready — Point at Object';
+    btnRec.disabled = false;
+  } catch (e) {
+    alert('Live camera needs HTTPS (port 8443) or use the "Native 4K Camera" button!\nError: ' + e.message);
+  }
+};
+
+btnRec.onclick = () => {
+  chunks = []; recSec = 0;
+  recorder = new MediaRecorder(mediaStream, { mimeType: 'video/webm' });
+  recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  recorder.onstop = () => {
+    selectedBlob = new File([new Blob(chunks, { type: 'video/webm' })], 'capture_360.webm', { type: 'video/webm' });
+    selectedInfo.textContent = `Recorded Video Ready (${(selectedBlob.size / 1048576).toFixed(1)} MB)`;
+    btnBuild3D.disabled = false;
+  };
+  recorder.start();
+  btnRec.disabled = true; btnStopRec.disabled = false;
+  recTimer = setInterval(() => {
+    recSec++;
+    const pct = Math.min(recSec / 30, 1);
+    progressRing.style.strokeDashoffset = 515 * (1 - pct);
+    camStatus.textContent = `REC ${recSec}s — Walk 360° Slowly`;
+  }, 1000);
+};
+
+btnStopRec.onclick = () => {
+  clearInterval(recTimer);
+  recorder.stop();
+  btnRec.disabled = false; btnStopRec.disabled = true;
+  camStatus.textContent = 'Capture Saved!';
+};
+
+document.getElementById('fileInput').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  selectedBlob = f;
+  selectedInfo.textContent = `Selected: ${f.name} (${(f.size / 1048576).toFixed(1)} MB)`;
+  btnBuild3D.disabled = false;
+};
+
+// --- UPLOAD & LIVE PIPELINE STREAM ---
+btnBuild3D.onclick = async () => {
+  if (!selectedBlob) return;
+  const fd = new FormData();
+  fd.append('video', selectedBlob);
+  fd.append('preset', document.getElementById('presetSel').value);
+  fd.append('fps', document.getElementById('fpsSel').value);
+
+  switchTab('build');
+  buildDot.classList.add('live');
+  const logEl = document.getElementById('consoleLog');
+  logEl.textContent = 'Uploading video to PC over local Wi-Fi...\n';
+
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    if (res.status === 404 || res.status === 405) {
+      throw new Error('Local PC Go/C++ backend engine is not running here (Static/Vercel preview mode). Run `go run main.go` locally to reconstruct videos, or use "Load Test Mesh" in 3D Studio.');
+    }
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    const es = new EventSource('/api/events?job=' + data.job_id);
+    es.onmessage = ev => {
+      const d = JSON.parse(ev.data);
+      document.getElementById('progressFill').style.width = d.percent + '%';
+      document.getElementById('pctLabel').textContent = d.percent + '%';
+      document.getElementById('stageLabel').textContent = d.message;
+      logEl.textContent += `[${d.percent}%] ${d.message}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+
+      if (d.status === 'done') {
+        es.close();
+        buildDot.classList.remove('live');
+        loadHistory();
+        loadOBJModel(d.model_url, d.mtl_url);
+        switchTab('studio');
+      } else if (d.status === 'error') {
+        es.close();
+        buildDot.classList.remove('live');
+      }
+    };
+  } catch (err) {
+    buildDot.classList.remove('live');
+    logEl.textContent += `[ERROR] ${err.message}\n`;
+  }
+};
+
+async function loadHistory() {
+  try {
+    const res = await fetch('/api/jobs');
+    const items = await res.json() || [];
+    const el = document.getElementById('scanHistory');
+    el.innerHTML = items.length ? '' : '<span style="font-size:0.78rem;color:var(--muted)">No previous scans yet.</span>';
+    items.reverse().forEach(it => {
+      const div = document.createElement('div');
+      div.className = 'scan-item';
+      div.innerHTML = `<span>${it.id}</span>
+        <button class="btn sec" style="min-height:36px;padding:5px 12px;font-size:0.76rem;flex-shrink:0;">Open 3D</button>`;
+      div.querySelector('button').onclick = () => {
+        loadOBJModel(it.model_url, it.mtl_url);
+        switchTab('studio');
+      };
+      el.appendChild(div);
+    });
+  } catch {}
+}
+loadHistory();
+
+// --- THREE.JS 3D STUDIO ---
+const container = document.getElementById('viewport');
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 500);
+camera.position.set(2.8, 2.2, 3.2);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+// Studio Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+const dir1 = new THREE.DirectionalLight(0xffffff, 1.4); dir1.position.set(5, 8, 5); scene.add(dir1);
+const dir2 = new THREE.DirectionalLight(0x80d8ff, 0.6); dir2.position.set(-5, 3, -5); scene.add(dir2);
+scene.add(new THREE.GridHelper(10, 20, 0x00e5ff, 0x1e2738));
+scene.add(new THREE.AxesHelper(1.5));
+
+let modelRoot = new THREE.Group();
+scene.add(modelRoot);
+let originalGeometries = new Map();
+let originalMaterials = new Map();
+
+function resizeRenderer() {
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  if (!w || !h) return;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h, false);
+}
+window.addEventListener('resize', resizeRenderer);
+if ('ResizeObserver' in window) {
+  new ResizeObserver(resizeRenderer).observe(container);
+}
+resizeRenderer();
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+function registerModel(obj) {
+  modelRoot.clear();
+  originalGeometries.clear();
+  originalMaterials.clear();
+  modelRoot.position.set(0, 0, 0);
+  modelRoot.rotation.set(0, 0, 0);
+  modelRoot.scale.set(1, 1, 1);
+
+  obj.traverse(c => {
+    if (c.isMesh) {
+      originalGeometries.set(c.uuid, c.geometry.clone());
+      originalMaterials.set(c.uuid, c.material);
+    }
+  });
+  modelRoot.add(obj);
+  groundPivot();
+  updateStats();
+}
+
+function updateStats() {
+  let tris = 0, verts = 0;
+  modelRoot.traverse(c => {
+    if (c.isMesh && c.geometry) {
+      const pos = c.geometry.attributes.position;
+      if (pos) {
+        verts += pos.count;
+        tris += c.geometry.index ? c.geometry.index.count / 3 : pos.count / 3;
+      }
+    }
+  });
+  document.getElementById('meshStats').textContent = `Vertices: ${verts.toLocaleString()} | Triangles: ${Math.round(tris).toLocaleString()}`;
+}
+
+function loadOBJModel(objUrl, mtlUrl) {
+  document.getElementById('meshStats').textContent = 'Loading Textured 3D Model...';
+  const basePath = objUrl.substring(0, objUrl.lastIndexOf('/') + 1);
+  const objName = objUrl.substring(objUrl.lastIndexOf('/') + 1);
+  const mtlName = mtlUrl.substring(mtlUrl.lastIndexOf('/') + 1);
+
+  const mtlLoader = new MTLLoader();
+  mtlLoader.setPath(basePath);
+  mtlLoader.load(mtlName, materials => {
+    materials.preload();
+    const objLoader = new OBJLoader();
+    objLoader.setMaterials(materials);
+    objLoader.setPath(basePath);
+    objLoader.load(objName, obj => registerModel(obj));
+  }, undefined, () => {
+    new OBJLoader().load(objUrl, obj => registerModel(obj));
+  });
+}
+
+// Demo Test Mesh (Test Unity/Unreal export immediately)
+document.getElementById('btnLoadDemo').onclick = () => {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0x00b0ff, roughness: 0.35, metalness: 0.25 });
+  const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.65, 0.22, 128, 24), mat);
+  knot.position.y = 1.0;
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.5, 0.15, 32), new THREE.MeshStandardMaterial({ color: 0x455a64 }));
+  base.position.y = 0.075;
+  g.add(knot, base);
+  registerModel(g);
+};
+
+// Shading modes
+window.setShading = mode => {
+  const clayMat = new THREE.MeshStandardMaterial({ color: 0xcfd8dc, roughness: 0.65 });
+  const wireMat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, wireframe: true });
+  modelRoot.traverse(c => {
+    if (!c.isMesh) return;
+    if (mode === 'textured') c.material = originalMaterials.get(c.uuid);
+    else if (mode === 'clay') c.material = clayMat;
+    else if (mode === 'wire') c.material = wireMat;
+  });
+};
+
+// Orientation & Ground Pivot
+function groundPivot() {
+  modelRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  if (box.isEmpty()) return;
+  const center = box.getCenter(new THREE.Vector3());
+  modelRoot.position.x -= center.x;
+  modelRoot.position.z -= center.z;
+  modelRoot.position.y -= box.min.y;
+}
+
+document.getElementById('btnFixAxis').onclick = () => {
+  const cur = parseFloat(document.getElementById('rotX').value);
+  document.getElementById('rotX').value = ((cur + 360) % 360) - 180;
+  applyTransforms();
+  groundPivot();
+};
+document.getElementById('btnGroundPivot').onclick = groundPivot;
+
+function applyTransforms() {
+  const rx = parseFloat(document.getElementById('rotX').value);
+  const ry = parseFloat(document.getElementById('rotY').value);
+  const rz = parseFloat(document.getElementById('rotZ').value);
+  const sc = parseFloat(document.getElementById('scaleSlider').value);
+  modelRoot.rotation.set(THREE.MathUtils.degToRad(rx), THREE.MathUtils.degToRad(ry), THREE.MathUtils.degToRad(rz));
+  modelRoot.scale.setScalar(sc);
+  document.getElementById('rotVal').textContent = `${rx}°, ${ry}°, ${rz}°`;
+  document.getElementById('scaleVal').textContent = `${sc.toFixed(2)}x`;
+}
+['rotX', 'rotY', 'rotZ', 'scaleSlider'].forEach(id => document.getElementById(id).oninput = applyTransforms);
+
+// Real Geometry Floor & Background Cropper
+document.getElementById('cropY').oninput = e => document.getElementById('cropYVal').textContent = e.target.value;
+document.getElementById('cropR').oninput = e => document.getElementById('cropRVal').textContent = e.target.value;
+
+document.getElementById('btnApplyCrop').onclick = () => {
+  const minY = parseFloat(document.getElementById('cropY').value);
+  const maxR = parseFloat(document.getElementById('cropR').value);
+  modelRoot.updateMatrixWorld(true);
+
+  modelRoot.traverse(c => {
+    if (!c.isMesh) return;
+    const baseGeo = originalGeometries.get(c.uuid);
+    if (!baseGeo) return;
+    const geo = baseGeo.index ? baseGeo.toNonIndexed() : baseGeo.clone();
+    const pos = geo.attributes.position;
+    const norm = geo.attributes.normal;
+    const uv = geo.attributes.uv;
+
+    const newPos = [], newNorm = [], newUv = [];
+    const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), cent = new THREE.Vector3();
+
+    for (let i = 0; i < pos.count; i += 3) {
+      vA.fromBufferAttribute(pos, i).applyMatrix4(c.matrixWorld);
+      vB.fromBufferAttribute(pos, i + 1).applyMatrix4(c.matrixWorld);
+      vC.fromBufferAttribute(pos, i + 2).applyMatrix4(c.matrixWorld);
+      cent.copy(vA).add(vB).add(vC).divideScalar(3);
+
+      const radial = Math.hypot(cent.x, cent.z);
+      if (cent.y >= minY && radial <= maxR) {
+        for (let k = 0; k < 3; k++) {
+          newPos.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+          if (norm) newNorm.push(norm.getX(i + k), norm.getY(i + k), norm.getZ(i + k));
+          if (uv) newUv.push(uv.getX(i + k), uv.getY(i + k));
+        }
+      }
+    }
+    const clean = new THREE.BufferGeometry();
+    clean.setAttribute('position', new THREE.Float32BufferAttribute(newPos, 3));
+    if (newNorm.length) clean.setAttribute('normal', new THREE.Float32BufferAttribute(newNorm, 3));
+    if (newUv.length) clean.setAttribute('uv', new THREE.Float32BufferAttribute(newUv, 2));
+    c.geometry.dispose();
+    c.geometry = clean;
+  });
+  groundPivot();
+  updateStats();
+};
+
+// --- UNITY & UNREAL ENGINE EXPORTERS ---
+function downloadBlob(blob, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+}
+
+function exportGLB(filename) {
+  setShading('textured');
+  const exporter = new GLTFExporter();
+  exporter.parse(modelRoot, result => {
+    downloadBlob(new Blob([result], { type: 'model/gltf-binary' }), filename);
+  }, err => alert('Export error: ' + err), { binary: true });
+}
+
+document.getElementById('btnExportUnity').onclick = () => exportGLB('RathoreScan_Unity.glb');
+document.getElementById('btnExportUnreal').onclick = () => exportGLB('RathoreScan_Unreal5.glb');
+document.getElementById('btnExportOBJ').onclick = () => {
+  const exporter = new OBJExporter();
+  const objText = exporter.parse(modelRoot);
+  downloadBlob(new Blob([objText], { type: 'text/plain' }), 'RathoreScan_Cleaned.obj');
+};
+</script>
+</body>
+</html>

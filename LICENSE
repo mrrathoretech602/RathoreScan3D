@@ -1,0 +1,41 @@
+RathoreScan 3D Studio — Source-Available & Protected License
+Copyright (c) 2026 RathoreTech (https://github.com/mrrathoretech602/RathoreScan3D)
+All Rights Reserved.
+
+READ THIS LICENSE CAREFULLY BEFORE DOWNLOADING, COPYING, MODIFYING, OR USING THIS SOFTWARE.
+
+1. PERMITTED PERSONAL & EVALUATION USE
+   Permission is hereby granted, free of charge, to any individual for personal,
+   non-commercial study, local evaluation, and educational testing of this repository,
+   strictly subject to the conditions below.
+
+2. RESTRICTIONS (THINK BEFORE YOU USE OR DISTRIBUTE)
+   You may NOT, without explicit prior written permission from the Copyright Holder:
+   a) Sell, rent, lease, sublicense, or commercially monetize this software or any
+      derivative work based on it (including SaaS, hosted APIs, or paid apps).
+   b) Rebrand, remove, or obscure copyright notices, author attribution ("RathoreTech" /
+      "RathoreScan 3D"), or this LICENSE file in any copy or fork.
+   c) Redistribute modified or unmodified binaries/source code as your own product.
+   d) Use this software for unauthorized surveillance, non-consensual 3D scanning of
+      individuals or private property, or any unlawful activity.
+
+3. MANDATORY ATTRIBUTION
+   Any permitted fork, demonstration, or educational reference MUST clearly credit:
+   "RathoreScan 3D Studio by RathoreTech (github.com/mrrathoretech602/RathoreScan3D)"
+   and include a copy of this LICENSE and SECURITY.md.
+
+4. THIRD-PARTY DEPENDENCIES
+   This project integrates with external tools that carry their own respective licenses
+   and must be obtained separately by the user:
+   - FFmpeg (LGPL / GPL)
+   - COLMAP (BSD-3-Clause)
+   - OpenMVS (AGPL-3.0)
+   - Three.js (MIT)
+
+5. NO WARRANTY & LIMITATION OF LIABILITY
+   THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.
+   IN NO EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES,
+   HARDWARE/GPU WEAR, DATA LOSS, OR SECURITY INCIDENTS ARISING FROM THE USE OF THIS SOFTWARE.
+
+For commercial licensing or partnership inquiries, contact:
+https://github.com/mrrathoretech602
