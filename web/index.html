@@ -435,6 +435,59 @@
     line-height: 1.45;
   }
 
+  .upload-dropzone {
+    border: 1.5px dashed rgba(0, 229, 255, 0.45);
+    background: rgba(0, 229, 255, 0.04);
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-align: center;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .upload-dropzone.dragover {
+    border-color: var(--ok);
+    background: rgba(0, 230, 118, 0.09);
+  }
+
+  .media-preview-box {
+    display: none;
+    background: #090d15;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px;
+    gap: 8px;
+    flex-direction: column;
+  }
+
+  .media-preview-box video {
+    width: 100%;
+    max-height: 180px;
+    border-radius: 8px;
+    background: #000;
+    object-fit: contain;
+  }
+
+  .thumb-strip {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .thumb-strip img {
+    width: 54px;
+    height: 54px;
+    object-fit: cover;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
   /* --- BUILD MONITOR --- */
   .progress-bar {
     width: 100%;
@@ -737,19 +790,32 @@
         </div>
 
         <div class="card">
-          <h3>Upload Video or 100+ Photos</h3>
+          <h3>Upload Video / Photo (PC &amp; Mobile)</h3>
           <p style="font-size:0.81rem; color:var(--muted); line-height:1.45;">
-            Phone/Laptop se <b>4K video</b> ya <b>100+ multi-angle photos</b> select karo (ya dono ek saath hybrid mode me):
+            Yaha se direct <b>Video ya Photos (100+ tak)</b> upload karke use karo — file select karo ya drag &amp; drop karo:
           </p>
+          <input type="file" id="mediaInput" accept="video/*,image/*" multiple style="display:none" />
           <input type="file" id="fileInput" accept="video/*" capture="environment" style="display:none" />
           <input type="file" id="photoInput" accept="image/*" multiple style="display:none" />
-          <div class="row row-actions">
-            <button class="btn sec" onclick="document.getElementById('fileInput').click()">
-              Pick / Record 4K Video
+
+          <div class="upload-dropzone" id="uploadDropzone">
+            <button class="btn" style="width:100%;" id="btnUploadMedia" onclick="document.getElementById('mediaInput').click()">
+              Upload Video / Photo
             </button>
-            <button class="btn" onclick="document.getElementById('photoInput').click()">
-              Select 100+ Photos (Batch)
-            </button>
+            <span style="font-size:0.75rem; color:var(--muted);">Video (.mp4/.mov/.webm) ya Multiple Photos (.jpg/.png) ek saath select ya drop karo</span>
+            <div class="row row-actions" style="width:100%;">
+              <button class="btn sec sm" onclick="document.getElementById('fileInput').click()">
+                Camera 4K Video
+              </button>
+              <button class="btn sec sm" onclick="document.getElementById('photoInput').click()">
+                100+ Photo Batch
+              </button>
+            </div>
+          </div>
+
+          <div class="media-preview-box" id="mediaPreviewBox">
+            <video id="uploadedVideoPreview" controls playsinline style="display:none;"></video>
+            <div class="thumb-strip" id="photoThumbStrip" style="display:none;"></div>
           </div>
 
           <div class="status-box" id="selectedInfo">No video or photos selected yet.</div>
@@ -776,7 +842,7 @@
           </div>
 
           <div class="row">
-            <button class="btn ok" style="flex:1;" id="btnBuild3D" disabled>Build 3D Model on Laptop Engine</button>
+            <button class="btn ok" style="flex:1;" id="btnBuild3D" disabled>Upload &amp; Build 3D Model</button>
             <button class="btn sec sm" id="btnClearInputs" title="Clear selected media">Clear</button>
           </div>
 
@@ -1013,7 +1079,63 @@ const progressRing = document.getElementById('progressRing');
 const buildDot = document.getElementById('buildDot');
 const snapCanvas = document.createElement('canvas');
 
+const mediaPreviewBox = document.getElementById('mediaPreviewBox');
+const uploadedVideoPreview = document.getElementById('uploadedVideoPreview');
+const photoThumbStrip = document.getElementById('photoThumbStrip');
+let previewVideoUrl = null;
+let thumbUrls = [];
+
+function renderMediaPreview() {
+  thumbUrls.forEach(u => URL.revokeObjectURL(u));
+  thumbUrls = [];
+  if (previewVideoUrl) {
+    URL.revokeObjectURL(previewVideoUrl);
+    previewVideoUrl = null;
+  }
+
+  const hasVid = !!selectedBlob;
+  const hasImgs = selectedPhotos.length > 0;
+  mediaPreviewBox.style.display = (hasVid || hasImgs) ? 'flex' : 'none';
+
+  if (hasVid) {
+    previewVideoUrl = URL.createObjectURL(selectedBlob);
+    uploadedVideoPreview.src = previewVideoUrl;
+    uploadedVideoPreview.style.display = 'block';
+  } else {
+    uploadedVideoPreview.removeAttribute('src');
+    uploadedVideoPreview.style.display = 'none';
+  }
+
+  photoThumbStrip.innerHTML = '';
+  if (hasImgs) {
+    photoThumbStrip.style.display = 'flex';
+    selectedPhotos.slice(0, 18).forEach(f => {
+      const url = URL.createObjectURL(f);
+      thumbUrls.push(url);
+      const img = document.createElement('img');
+      img.src = url;
+      img.alt = f.name;
+      photoThumbStrip.appendChild(img);
+    });
+  } else {
+    photoThumbStrip.style.display = 'none';
+  }
+}
+
+function handlePickedFiles(fileList) {
+  const files = Array.from(fileList || []);
+  for (const f of files) {
+    if (f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|avi)$/i.test(f.name)) {
+      selectedBlob = f;
+    } else if (f.type.startsWith('image/') || /\.(jpg|jpeg|png|webp|bmp)$/i.test(f.name)) {
+      selectedPhotos.push(f);
+    }
+  }
+  refreshSelectionSummary();
+}
+
 function refreshSelectionSummary() {
+  renderMediaPreview();
   const parts = [];
   let totalBytes = 0;
   if (selectedBlob) {
@@ -1027,7 +1149,7 @@ function refreshSelectionSummary() {
       ? 'Ultra Accuracy Ready'
       : selectedPhotos.length >= 25
         ? 'Good 360° Coverage'
-        : 'Add more angles (25–100+ recommended)';
+        : 'Add more angles (25–100+ recommended, or 1+ photo preview)';
     parts.push(`Photos: ${selectedPhotos.length} (${(pBytes / 1048576).toFixed(1)} MB) — ${rating}`);
   }
   if (parts.length === 0) {
@@ -1098,6 +1220,10 @@ btnStopRec.onclick = () => {
   camStatus.textContent = 'Video Capture Saved!';
 };
 
+document.getElementById('mediaInput').onchange = e => {
+  handlePickedFiles(e.target.files);
+};
+
 document.getElementById('fileInput').onchange = e => {
   const f = e.target.files[0];
   if (!f) return;
@@ -1112,9 +1238,27 @@ document.getElementById('photoInput').onchange = e => {
   refreshSelectionSummary();
 };
 
+const uploadDropzone = document.getElementById('uploadDropzone');
+['dragenter', 'dragover'].forEach(evt => {
+  uploadDropzone.addEventListener(evt, e => {
+    e.preventDefault();
+    uploadDropzone.classList.add('dragover');
+  });
+});
+['dragleave', 'drop'].forEach(evt => {
+  uploadDropzone.addEventListener(evt, e => {
+    e.preventDefault();
+    uploadDropzone.classList.remove('dragover');
+  });
+});
+uploadDropzone.addEventListener('drop', e => {
+  handlePickedFiles(e.dataTransfer?.files);
+});
+
 document.getElementById('btnClearInputs').onclick = () => {
   selectedBlob = null;
   selectedPhotos = [];
+  document.getElementById('mediaInput').value = '';
   document.getElementById('fileInput').value = '';
   document.getElementById('photoInput').value = '';
   progressRing.style.strokeDashoffset = 515;
