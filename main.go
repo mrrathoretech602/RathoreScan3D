@@ -181,14 +181,17 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	lanIP := getLocalIP()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":        "online",
-		"lan_ip":        getLocalIP(),
-		"engine_ready":  exeErr == nil,
-		"ffmpeg_ready":  toolExists(cfg["FFMPEG_BIN"], "ffmpeg"),
-		"colmap_ready":  toolExists(cfg["COLMAP_BIN"], "colmap"),
-		"openmvs_ready": openmvsOk,
+		"status":            "online",
+		"lan_ip":            lanIP,
+		"mobile_lan_url":    fmt.Sprintf("https://%s:8443", lanIP),
+		"vercel_bridge_url": fmt.Sprintf("https://rathorescan3d.vercel.app/?server=https://%s:8443", lanIP),
+		"engine_ready":      exeErr == nil,
+		"ffmpeg_ready":      toolExists(cfg["FFMPEG_BIN"], "ffmpeg"),
+		"colmap_ready":      toolExists(cfg["COLMAP_BIN"], "colmap"),
+		"openmvs_ready":     openmvsOk,
 	})
 }
 
@@ -482,6 +485,9 @@ func withSecurityAndCORS(next http.Handler) http.Handler {
 }
 
 func main() {
+	if logFile, err := os.OpenFile("server.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	}
 	os.MkdirAll("jobs", 0755)
 	lanIP := getLocalIP()
 	certFile, keyFile := ensureCert(lanIP)

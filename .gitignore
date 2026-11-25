@@ -1,9 +1,12 @@
 # Compiled binaries & build artifacts
 *.exe
+*.obj
+*.pdb
 *.dll
 *.so
 *.dylib
 engine/scan3d_engine
+server.log
 
 # Local TLS certificates & secrets (NEVER commit)
 *.pem

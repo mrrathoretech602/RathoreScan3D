@@ -963,7 +963,8 @@ async function checkEngineHealth() {
       chip('C++ Engine', h.engine_ready) +
       chip('FFmpeg', h.ffmpeg_ready) +
       chip('COLMAP', h.colmap_ready) +
-      chip('OpenMVS', h.openmvs_ready);
+      chip('OpenMVS', h.openmvs_ready) +
+      (h.vercel_bridge_url ? `<button class="btn sec sm" type="button" onclick="navigator.clipboard?.writeText('${h.vercel_bridge_url}').then(()=>alert('Copied Mobile Vercel Link!\\nOpen on Phone (same Wi-Fi):\\n${h.vercel_bridge_url}'))">Copy Mobile Link (${h.lan_ip})</button>` : '');
   } catch {
     enginePill.className = 'conn-pill warn';
     enginePillText.textContent = 'Preview Mode';
