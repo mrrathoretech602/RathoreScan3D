@@ -1,4 +1,4 @@
-// RathoreScan 3D Studio — Self-Hosted Photogrammetry Server & Vercel Mobile Bridge
+// RathoreScan 3D Studio — Local PC Photogrammetry Server
 // Copyright (c) 2026 RathoreTech (https://github.com/mrrathoretech602/RathoreScan3D)
 // Licensed under the RathoreScan 3D Source-Available & Protected License (see LICENSE).
 
@@ -6,18 +6,10 @@ package main
 
 import (
 	"bufio"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -53,67 +45,6 @@ var (
 	jobsMu sync.RWMutex
 	progRe = regexp.MustCompile(`\[PROGRESS:(\d+)\]\s*(.*)`)
 )
-
-func getLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "127.0.0.1"
-	}
-	for _, a := range addrs {
-		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ip4 := ipnet.IP.To4(); ip4 != nil {
-				s := ip4.String()
-				if strings.HasPrefix(s, "192.168.") || strings.HasPrefix(s, "10.") || strings.HasPrefix(s, "172.") {
-					return s
-				}
-			}
-		}
-	}
-	return "127.0.0.1"
-}
-
-func ensureCert(lanIP string) (string, string) {
-	certFile, keyFile := "cert.pem", "key.pem"
-	if _, err := os.Stat(certFile); err == nil {
-		if _, err := os.Stat(keyFile); err == nil {
-			return certFile, keyFile
-		}
-	}
-
-	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
-		Subject:      pkix.Name{CommonName: "RathoreScan3D Local"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP(lanIP)},
-		DNSNames:     []string{"localhost"},
-	}
-	derBytes, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
-	if err != nil {
-		log.Fatal(err)
-	}
-	cOut, err := os.Create(certFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-	pem.Encode(cOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	cOut.Close()
-
-	b, err := x509.MarshalECPrivateKey(priv)
-	if err != nil {
-		log.Fatal(err)
-	}
-	kOut, err := os.Create(keyFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-	pem.Encode(kOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: b})
-	kOut.Close()
-	return certFile, keyFile
-}
 
 func (j *JobState) emit(ev JobEvent) {
 	j.mu.Lock()
@@ -181,18 +112,13 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	lanIP := getLocalIP()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":            "online",
-		"lan_ip":            lanIP,
-		"mobile_http_url":   fmt.Sprintf("http://%s:8080", lanIP),
-		"mobile_lan_url":    fmt.Sprintf("https://%s:8443", lanIP),
-		"vercel_bridge_url": fmt.Sprintf("https://rathorescan3d.vercel.app/?server=https://%s:8443", lanIP),
-		"engine_ready":      exeErr == nil,
-		"ffmpeg_ready":      toolExists(cfg["FFMPEG_BIN"], "ffmpeg"),
-		"colmap_ready":      toolExists(cfg["COLMAP_BIN"], "colmap"),
-		"openmvs_ready":     openmvsOk,
+		"status":        "online",
+		"engine_ready":  exeErr == nil,
+		"ffmpeg_ready":  toolExists(cfg["FFMPEG_BIN"], "ffmpeg"),
+		"colmap_ready":  toolExists(cfg["COLMAP_BIN"], "colmap"),
+		"openmvs_ready": openmvsOk,
 	})
 }
 
@@ -215,15 +141,10 @@ func sanitizeImageExt(name string) string {
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	// Allow up to 4GB combined video + multi-photo upload
 	r.Body = http.MaxBytesReader(w, r.Body, 4<<30)
 	if err := r.ParseMultipartForm(128 << 20); err != nil {
 		http.Error(w, "Upload error: "+err.Error(), http.StatusBadRequest)
@@ -299,7 +220,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	if !hasVideo && photoCount == 0 {
 		os.RemoveAll(jobDir)
-		http.Error(w, "Please upload a 360° video or at least 3 photos.", http.StatusBadRequest)
+		http.Error(w, "Please upload a video or at least 3 photos.", http.StatusBadRequest)
 		return
 	}
 
@@ -460,26 +381,13 @@ func handleListJobs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(list)
 }
 
-func withSecurityAndCORS(next http.Handler) http.Handler {
+func withHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
-		w.Header().Set("Access-Control-Allow-Private-Network", "true")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -490,8 +398,6 @@ func main() {
 		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
 	}
 	os.MkdirAll("jobs", 0755)
-	lanIP := getLocalIP()
-	certFile, keyFile := ensureCert(lanIP)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir("web")))
@@ -500,20 +406,12 @@ func main() {
 	mux.HandleFunc("/api/upload", handleUpload)
 	mux.HandleFunc("/api/events", handleEvents)
 	mux.HandleFunc("/api/jobs", handleListJobs)
-	handler := withSecurityAndCORS(mux)
 
-	fmt.Println("================================================================")
-	fmt.Println("   RATHORESCAN 3D STUDIO - PC APP + LIVE VERCEL MOBILE BRIDGE")
-	fmt.Println("================================================================")
-	fmt.Printf(" PC Desktop App : http://localhost:8080\n")
-	fmt.Printf(" Mobile Wi-Fi   : https://%s:8443\n", lanIP)
-	fmt.Printf(" Vercel Bridge  : https://rathorescan3d.vercel.app/?server=https://%s:8443\n", lanIP)
-	fmt.Println(" Tip (4G/5G): Run `cloudflared tunnel --url http://localhost:8080`")
-	fmt.Println("              and open https://rathorescan3d.vercel.app/?server=<tunnel-url>")
-	fmt.Println("================================================================")
+	fmt.Println("====================================================")
+	fmt.Println("   RATHORESCAN 3D STUDIO - LOCAL PC APP SERVER")
+	fmt.Println("====================================================")
+	fmt.Println(" Local PC URL : http://127.0.0.1:8080")
+	fmt.Println("====================================================")
 
-	go func() {
-		log.Fatal(http.ListenAndServe(":8080", handler))
-	}()
-	log.Fatal(http.ListenAndServeTLS(":8443", certFile, keyFile, handler))
+	log.Fatal(http.ListenAndServe("127.0.0.1:8080", withHeaders(mux)))
 }

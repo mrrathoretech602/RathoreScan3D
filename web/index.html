@@ -733,11 +733,10 @@
 <header>
   <div class="brand">
     <img src="/icon-192.png" alt="Scan3D" class="brand-icon" />
-    <div class="logo">RATHORESCAN 3D <span>PC + Mobile Studio</span></div>
+    <div class="logo">RATHORESCAN 3D <span>Local Laptop Studio</span></div>
   </div>
   <div class="header-actions">
     <span class="conn-pill" id="enginePill"><span class="conn-dot"></span><span id="enginePillText">Checking...</span></span>
-    <button id="btnInstallApp">Install App</button>
     <nav class="top-nav" aria-label="Primary Navigation">
       <button class="active" data-tab="capture" onclick="switchTab('capture')">1. Capture</button>
       <button data-tab="build" onclick="switchTab('build')">2. Build Engine</button>
@@ -750,15 +749,13 @@
   <!-- TAB 1: CAPTURE & MULTI-PHOTO / VIDEO UPLOAD -->
   <section id="tab-capture" class="tab active">
     <div class="tab-inner">
-      <!-- LIVE PC SERVER / VERCEL MOBILE BRIDGE -->
+      <!-- LOCAL PC ENGINE STATUS BAR -->
       <div class="bridge-bar">
-        <div class="bridge-inputs">
-          <input type="url" id="serverUrlInput" placeholder="PC Server URL (e.g. https://192.168.1.5:8443 or Cloudflare Tunnel)" />
-          <button class="btn sec sm" id="btnConnectServer">Connect PC</button>
-          <button class="btn sec sm" id="btnResetServer">Local</button>
+        <div style="font-size:0.84rem; font-weight:700; color:var(--accent);">
+          Local Laptop 3D Photogrammetry Engine
         </div>
         <div class="chip-row" id="healthChips">
-          <span class="mini-chip">Connecting to PC engine...</span>
+          <span class="mini-chip">Connecting to Local PC Engine...</span>
         </div>
       </div>
 
@@ -982,89 +979,40 @@ import { USDZExporter } from 'three/addons/exporters/USDZExporter.js';
 import { SimplifyModifier } from 'three/addons/modifiers/SimplifyModifier.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
-// --- PWA SERVICE WORKER & INSTALL PROMPT ---
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
-}
-let deferredPrompt = null;
-const btnInstallApp = document.getElementById('btnInstallApp');
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault();
-  deferredPrompt = e;
-  btnInstallApp.style.display = 'inline-flex';
-});
-btnInstallApp.onclick = async () => {
-  if (!deferredPrompt) return;
-  deferredPrompt.prompt();
-  await deferredPrompt.userChoice;
-  deferredPrompt = null;
-  btnInstallApp.style.display = 'none';
-};
-
-// --- PC ENGINE BRIDGE (LOCALHOST / LAN / VERCEL REMOTE TUNNEL) ---
-const serverUrlInput = document.getElementById('serverUrlInput');
+// --- LOCAL PC ENGINE STATUS (100% LOCALHOST) ---
 const enginePill = document.getElementById('enginePill');
 const enginePillText = document.getElementById('enginePillText');
 const healthChips = document.getElementById('healthChips');
-const bridgeInputs = document.querySelector('.bridge-inputs');
 
-const isLocalHostApp = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname) ||
-  /^(192\.168\.|10\.|172\.)/.test(window.location.hostname);
-
-const qpServer = new URLSearchParams(window.location.search).get('server');
-let serverBase = '';
-if (isLocalHostApp) {
-  // Always talk directly to same-origin PC/LAN server when running locally
-  localStorage.removeItem('rathorescan_server');
-  serverBase = '';
-  if (bridgeInputs) bridgeInputs.style.display = 'none';
-} else {
-  serverBase = (qpServer || localStorage.getItem('rathorescan_server') || '').replace(/\/+$/, '');
-  if (qpServer) localStorage.setItem('rathorescan_server', serverBase);
-  serverUrlInput.value = serverBase;
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister())).catch(() => {});
 }
+localStorage.removeItem('rathorescan_server');
 
 function apiUrl(path) {
-  return serverBase ? `${serverBase}${path}` : path;
+  return path;
 }
 
 async function checkEngineHealth() {
   try {
-    const res = await fetch(apiUrl('/api/health'), { mode: 'cors' });
+    const res = await fetch('/api/health', { cache: 'no-store' });
     if (!res.ok) throw new Error('offline');
     const h = await res.json();
     enginePill.className = 'conn-pill ok';
-    enginePillText.textContent = serverBase ? 'Remote PC Online' : 'PC Engine Online';
+    enginePillText.textContent = 'PC Engine Online';
     const chip = (label, ok) => `<span class="mini-chip ${ok ? 'ok' : 'err'}">${label}: ${ok ? 'OK' : 'Missing'}</span>`;
-    const mobileHttp = h.mobile_http_url || `http://${h.lan_ip}:8080`;
     healthChips.innerHTML =
       chip('Go Server', true) +
       chip('C++ Engine', h.engine_ready) +
       chip('FFmpeg', h.ffmpeg_ready) +
       chip('COLMAP', h.colmap_ready) +
-      chip('OpenMVS', h.openmvs_ready) +
-      `<button class="btn sec sm" type="button" onclick="navigator.clipboard?.writeText('${mobileHttp}').then(()=>alert('Copied Phone Wi-Fi URL!\\nOpen this in Mobile Browser (same Wi-Fi):\\n${mobileHttp}'))">Phone Wi-Fi Link: ${mobileHttp}</button>`;
+      chip('OpenMVS', h.openmvs_ready);
   } catch {
     enginePill.className = 'conn-pill warn';
-    enginePillText.textContent = 'Preview Mode';
-    healthChips.innerHTML = '<span class="mini-chip">Vercel Preview — Enter HTTPS Tunnel URL (e.g. Cloudflare Tunnel) or open Phone Wi-Fi URL directly</span>';
+    enginePillText.textContent = 'Server Offline';
+    healthChips.innerHTML = '<span class="mini-chip err">Local Server Offline — Launch from Desktop App Icon</span>';
   }
 }
-
-document.getElementById('btnConnectServer').onclick = () => {
-  serverBase = serverUrlInput.value.trim().replace(/\/+$/, '');
-  localStorage.setItem('rathorescan_server', serverBase);
-  checkEngineHealth();
-  loadHistory();
-};
-
-document.getElementById('btnResetServer').onclick = () => {
-  serverBase = '';
-  serverUrlInput.value = '';
-  localStorage.removeItem('rathorescan_server');
-  checkEngineHealth();
-  loadHistory();
-};
 
 checkEngineHealth();
 
@@ -1306,12 +1254,12 @@ btnBuild3D.onclick = () => {
   };
   xhr.onerror = () => {
     buildDot.classList.remove('live');
-    logEl.textContent += '[ERROR] Cannot reach Laptop Engine. Check PC Server URL or Wi-Fi connection.\n';
+    logEl.textContent += '[ERROR] Local PC server is not running. Close this window and click the RathoreScan 3D Studio Desktop icon to start the background server.\n';
   };
   xhr.onload = () => {
     if (xhr.status === 404 || xhr.status === 405) {
       buildDot.classList.remove('live');
-      logEl.textContent += '[INFO] Static Vercel preview mode: connect your Laptop PC Server URL in Capture tab to run 3D reconstruction.\n';
+      logEl.textContent += '[ERROR] Local PC upload endpoint not available.\n';
       return;
     }
     if (xhr.status < 200 || xhr.status >= 300) {
@@ -1365,7 +1313,7 @@ async function loadHistory() {
       el.appendChild(div);
     });
   } catch {
-    el.innerHTML = '<span style="font-size:0.78rem;color:var(--muted)">Preview mode — connect your Laptop PC server URL above or test the 3D Studio tab.</span>';
+    el.innerHTML = '<span style="font-size:0.78rem;color:var(--muted)">Local server offline — launch RathoreScan 3D Studio from Desktop icon.</span>';
   }
 }
 loadHistory();

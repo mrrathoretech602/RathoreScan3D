@@ -35,7 +35,7 @@ func startBackgroundServer(appDir string) {
 }
 
 func openAppWindow() {
-	url := "http://localhost:8080"
+	url := "http://127.0.0.1:8080"
 	candidates := []string{
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
