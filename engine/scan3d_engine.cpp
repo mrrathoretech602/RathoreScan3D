@@ -1556,7 +1556,7 @@ int main(int argc, char* argv[]) {
 
     logProgress(90, "Building Clean 3D Polygon Mesh (Preset: " + preset + ")...");
     std::string meshCmd = mvsExe(cfg, "ReconstructMesh") + " scene_dense.mvs -o scene_mesh.mvs --decimate " + decimateFactor +
-        " --remove-spurious 35 --remove-spikes 1 --close-holes 60 --smooth 3";
+        " --remove-spurious 35 --remove-spikes 1 --close-holes 0 --smooth 2";
     if (runCmd(meshCmd, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS ReconstructMesh failed.\n"; return 10; }
 
     fs::path meshPly = jobDir / "scene_mesh.ply";
