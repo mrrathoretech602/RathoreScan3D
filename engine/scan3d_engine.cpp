@@ -1782,8 +1782,68 @@ int main(int argc, char* argv[]) {
     if (runCmd(mvsInit, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS InterfaceCOLMAP failed.\n"; return 8; }
 
     logProgress(82, "Generating Dense 3D Point Cloud...");
-    std::string densifyCmd = mvsExe(cfg, "DensifyPointCloud") + " scene.mvs --resolution-level " + std::to_string(mvsResLevel) + " --max-resolution " + std::to_string(maxImgSize) + " --number-views " + std::to_string(std::min(5, regViews));
-    if (runCmd(densifyCmd, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS DensifyPointCloud failed.\n"; return 9; }
+    auto cleanTempDmaps = [](const fs::path& dir) {
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".dmap") {
+                fs::remove(entry.path(), ec);
+            }
+        }
+    };
+    struct DensifyProfile {
+        int resLevel;
+        int maxRes;
+        int numViews;
+        int fusionFilter;
+        int maxThreads;
+        std::string label;
+    };
+    std::vector<DensifyProfile> densifyTiers;
+    if (regViews >= 50) {
+        int safeRes = std::max(mvsResLevel, 2);
+        int safeMax = std::min(maxImgSize, 1280);
+        densifyTiers.push_back({ safeRes, safeMax, std::min(4, regViews), 1, 4, "Large-scene memory-safe mode (" + std::to_string(regViews) + " views)" });
+        densifyTiers.push_back({ 3, 960, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, 960px, 2 threads)" });
+        densifyTiers.push_back({ 3, 768, std::min(3, regViews), 0, 2, "Ultra-safe merge retry (level 3, 768px)" });
+    } else if (regViews >= 24) {
+        densifyTiers.push_back({ mvsResLevel, maxImgSize, std::min(4, regViews), (mvsResLevel <= 1 ? 1 : 2), 4, "Medium-scene balanced mode" });
+        densifyTiers.push_back({ std::max(mvsResLevel + 1, 2), std::min(maxImgSize, 1280), std::min(4, regViews), 1, 4, "Memory-safe retry (level 2, 1280px)" });
+        densifyTiers.push_back({ 3, 960, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, 960px)" });
+    } else {
+        densifyTiers.push_back({ mvsResLevel, maxImgSize, std::min(5, regViews), 2, 0, "Preset full quality" });
+        densifyTiers.push_back({ std::max(mvsResLevel + 1, 2), std::min(maxImgSize, 1280), std::min(4, regViews), 1, 4, "Memory-safe retry (level 2, 1280px)" });
+        densifyTiers.push_back({ 3, 960, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, 960px)" });
+    }
+
+    bool densifyOk = false;
+    std::error_code denseEc;
+    for (size_t ti = 0; ti < densifyTiers.size(); ++ti) {
+        const auto& dp = densifyTiers[ti];
+        cleanTempDmaps(jobDir);
+        fs::remove(jobDir / "scene_dense.mvs", denseEc);
+        fs::remove(jobDir / "scene_dense.ply", denseEc);
+        if (ti > 0 || regViews >= 50) {
+            logProgress(82, "[AI-HOW] Dense cloud: " + dp.label);
+        }
+        std::string densifyCmd = mvsExe(cfg, "DensifyPointCloud") +
+            " scene.mvs --resolution-level " + std::to_string(dp.resLevel) +
+            " --max-resolution " + std::to_string(dp.maxRes) +
+            " --number-views " + std::to_string(std::max(2, dp.numViews)) +
+            " --fusion-filter " + std::to_string(dp.fusionFilter) +
+            " --remove-dmaps 1";
+        if (dp.maxThreads > 0) {
+            densifyCmd += " --max-threads " + std::to_string(dp.maxThreads);
+        }
+        if (runCmd(densifyCmd, jobDir.string()) == 0 &&
+            fs::exists(jobDir / "scene_dense.mvs", denseEc) &&
+            fs::exists(jobDir / "scene_dense.ply", denseEc) &&
+            fs::file_size(jobDir / "scene_dense.ply", denseEc) > 256) {
+            densifyOk = true;
+            break;
+        }
+    }
+    cleanTempDmaps(jobDir);
+    if (!densifyOk) { std::cerr << "[ERROR] OpenMVS DensifyPointCloud failed across all memory tiers.\n"; return 9; }
 
     logProgress(90, "Building Clean 3D Polygon Mesh (Preset: " + preset + ")...");
     std::string meshCmd = mvsExe(cfg, "ReconstructMesh") + " scene_dense.mvs -o scene_mesh.mvs --decimate " + decimateFactor +
@@ -1824,10 +1884,17 @@ int main(int argc, char* argv[]) {
 
     logProgress(97, "Baking Clean UV Map & Texture...");
     fs::path finalObj = outDir / "model.obj";
-    std::string texCmd = mvsExe(cfg, "TextureMesh") + " scene_dense.mvs -m " + meshInputForTex +
-        " -o \"" + finalObj.string() + "\" --export-type obj --resolution-level " + std::to_string(texResLevel) +
-        " --outlier-threshold 0 --global-seam-leveling 0 --local-seam-leveling 0 --empty-color 8421504 --cost-smoothness-ratio 0.4";
-    if (runCmd(texCmd, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS TextureMesh failed.\n"; return 11; }
+    auto makeTexCmd = [&](int resLvl) {
+        return mvsExe(cfg, "TextureMesh") + " scene_dense.mvs -m " + meshInputForTex +
+            " -o \"" + finalObj.string() + "\" --export-type obj --resolution-level " + std::to_string(resLvl) +
+            " --outlier-threshold 0 --global-seam-leveling 0 --local-seam-leveling 0 --empty-color 8421504 --cost-smoothness-ratio 0.4";
+    };
+    int texExit = runCmd(makeTexCmd(texResLevel), jobDir.string());
+    if (texExit != 0 && texResLevel < 2) {
+        logProgress(97, "Retrying TextureMesh at memory-safe UV resolution...");
+        texExit = runCmd(makeTexCmd(texResLevel + 1), jobDir.string());
+    }
+    if (texExit != 0) { std::cerr << "[ERROR] OpenMVS TextureMesh failed.\n"; return 11; }
 
     fs::path finalMtl = outDir / "model.mtl";
     if (fs::exists(finalMtl)) {
