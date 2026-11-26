@@ -3,3 +3,4 @@
 FFMPEG_BIN=C:\Tools\ffmpeg\bin\ffmpeg.exe
 COLMAP_BIN=C:\Tools\COLMAP\COLMAP.bat
 OPENMVS_DIR=C:\Tools\OpenMVS\vc17\x64\Release
+PYTHON_BIN=C:\Users\Owner\AppData\Local\Programs\Python\Python314\python.exe

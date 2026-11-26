@@ -7,7 +7,7 @@ echo ====================================================
 echo [1/3] Checking C++17 Photogrammetry Engine...
 where g++ >nul 2>&1
 if not errorlevel 1 (
-    g++ -O3 -std=c++17 engine\scan3d_engine.cpp -o engine\scan3d_engine.exe
+    g++ -O3 -std=c++17 -static -static-libgcc -static-libstdc++ engine\scan3d_engine.cpp -o engine\scan3d_engine.exe
     if errorlevel 1 (
         echo [WARN] g++ compile failed! Check engine\scan3d_engine.cpp
     ) else (

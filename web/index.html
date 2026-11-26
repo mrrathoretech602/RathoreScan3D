@@ -934,6 +934,11 @@
         </div>
       </div>
 
+      <div class="studio-section" id="aiReportBox" style="display:none; background:#0d121c; border:1px solid rgba(0,229,255,0.35); border-radius:10px; padding:10px;">
+        <label style="color:var(--accent); font-weight:700; margin-bottom:2px;">AI Scene Understanding</label>
+        <div id="aiReportContent" style="font-size:0.75rem; line-height:1.45; color:var(--text);"></div>
+      </div>
+
       <div class="studio-section">
         <label>Shading Mode</label>
         <div class="row">
@@ -1633,11 +1638,32 @@ function updateStats() {
   document.getElementById('meshStats').textContent = `Verts: ${verts.toLocaleString()} | Tris: ${Math.round(tris).toLocaleString()} | ~${kb} KB`;
 }
 
+async function loadSceneReport(basePath) {
+  const box = document.getElementById('aiReportBox');
+  const content = document.getElementById('aiReportContent');
+  if (!box || !content) return;
+  try {
+    const res = await fetch(basePath + 'scene_report.json', { cache: 'no-store' });
+    if (!res.ok) { box.style.display = 'none'; return; }
+    const r = await res.json();
+    const orbitColor = (r.orbit_deg >= 150) ? 'var(--ok)' : 'var(--warn)';
+    content.innerHTML =
+      `<div><b>What:</b> ${r.what || '-'}</div>` +
+      `<div><b>Where:</b> ${r.where || '-'}</div>` +
+      `<div style="color:${orbitColor}"><b>Why / Orbit:</b> ${r.why || '-'}</div>` +
+      `<div><b>How:</b> ${r.how || '-'}</div>`;
+    box.style.display = 'flex';
+  } catch {
+    box.style.display = 'none';
+  }
+}
+
 function loadOBJModel(objUrl, mtlUrl) {
   document.getElementById('meshStats').textContent = 'Loading Textured 3D Model...';
   const basePath = objUrl.substring(0, objUrl.lastIndexOf('/') + 1);
   const objName = objUrl.substring(objUrl.lastIndexOf('/') + 1);
   const mtlName = mtlUrl.substring(mtlUrl.lastIndexOf('/') + 1);
+  loadSceneReport(basePath);
 
   const mtlLoader = new MTLLoader();
   mtlLoader.setCrossOrigin('anonymous');

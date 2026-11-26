@@ -169,6 +169,32 @@ bool decodeImageToPPM(const ToolConfig& cfg, const fs::path& srcImg, const fs::p
     return runCmd(cmd) == 0 && fs::exists(dstPpm);
 }
 
+bool loadPGM8(const fs::path& pgmPath, int expectedW, int expectedH, std::vector<uint8_t>& outData) {
+    std::ifstream in(pgmPath, std::ios::binary);
+    if (!in.is_open()) return false;
+    auto nextToken = [&]() -> std::string {
+        std::string tok;
+        char c;
+        while (in.get(c)) {
+            if (std::isspace(static_cast<unsigned char>(c))) continue;
+            if (c == '#') { std::string d; std::getline(in, d); continue; }
+            tok.push_back(c);
+            while (in.get(c) && !std::isspace(static_cast<unsigned char>(c))) tok.push_back(c);
+            break;
+        }
+        return tok;
+    };
+    if (nextToken() != "P5") return false;
+    int w = std::stoi(nextToken());
+    int h = std::stoi(nextToken());
+    int maxVal = std::stoi(nextToken());
+    if (w != expectedW || h != expectedH || maxVal <= 0) return false;
+    size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
+    outData.resize(n);
+    in.read(reinterpret_cast<char*>(outData.data()), static_cast<std::streamsize>(n));
+    return static_cast<size_t>(in.gcount()) == n;
+}
+
 bool tryEstimateAiDepth(const ToolConfig& cfg, const fs::path& srcImg, const fs::path& outPgm, int w, int h, std::vector<float>& aiDepth) {
     fs::path script = fs::exists("engine/ai_depth.py")
         ? fs::path("engine/ai_depth.py")
@@ -180,6 +206,159 @@ bool tryEstimateAiDepth(const ToolConfig& cfg, const fs::path& srcImg, const fs:
         outPgm.string() + "\" " + std::to_string(w) + " " + std::to_string(h);
     if (runCmd(cmd) != 0 || !fs::exists(outPgm)) return false;
     return loadPGM16(outPgm, w, h, aiDepth);
+}
+
+bool tryAiSemanticAndDepth(
+    const ToolConfig& cfg,
+    const fs::path& srcImg,
+    const fs::path& outSegPgm,
+    const fs::path& outDepthPgm,
+    int w, int h,
+    std::vector<uint8_t>& outSeg,
+    std::vector<float>& outDepth
+) {
+    fs::path script = fs::exists("engine/ai_understand.py")
+        ? fs::path("engine/ai_understand.py")
+        : fs::path("../engine/ai_understand.py");
+    if (fs::exists(script)) {
+        std::string py = cfg.pythonBin.empty() ? "python" : ("\"" + cfg.pythonBin + "\"");
+        std::string cmd = py + " \"" + fs::absolute(script).string() + "\" deep-analyze \"" + srcImg.string() +
+            "\" \"" + outSegPgm.string() + "\" \"" + outDepthPgm.string() + "\" " +
+            std::to_string(w) + " " + std::to_string(h);
+        if (runCmd(cmd) == 0 && loadPGM8(outSegPgm, w, h, outSeg) && loadPGM16(outDepthPgm, w, h, outDepth)) {
+            return true;
+        }
+    }
+    outSeg.clear();
+    return tryEstimateAiDepth(cfg, srcImg, outDepthPgm, w, h, outDepth);
+}
+
+struct AiSceneInfo {
+    bool valid = false;
+    std::string archetype = "object";
+    std::string what = "";
+    std::string where = "";
+};
+
+std::string jsonEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '"') out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else if (c == '\n' || c == '\r') out += ' ';
+        else out += c;
+    }
+    return out;
+}
+
+std::string extractJsonStringField(const std::string& jsonText, const std::string& key) {
+    std::string pat = "\"" + key + "\"";
+    auto p = jsonText.find(pat);
+    if (p == std::string::npos) return "";
+    p = jsonText.find(':', p + pat.size());
+    if (p == std::string::npos) return "";
+    p = jsonText.find('"', p);
+    if (p == std::string::npos) return "";
+    auto end = jsonText.find('"', p + 1);
+    while (end != std::string::npos && jsonText[end - 1] == '\\') {
+        end = jsonText.find('"', end + 1);
+    }
+    return (end != std::string::npos) ? jsonText.substr(p + 1, end - p - 1) : "";
+}
+
+AiSceneInfo runAiUnderstandBatch(
+    const ToolConfig& cfg,
+    const fs::path& imgDir,
+    const fs::path& masksDir,
+    const std::string& sceneMode,
+    const fs::path& outJson
+) {
+    AiSceneInfo info;
+    fs::path script = fs::exists("engine/ai_understand.py")
+        ? fs::path("engine/ai_understand.py")
+        : fs::path("../engine/ai_understand.py");
+    if (!fs::exists(script)) return info;
+
+    std::string py = cfg.pythonBin.empty() ? "python" : ("\"" + cfg.pythonBin + "\"");
+    std::string cmd = py + " \"" + fs::absolute(script).string() + "\" analyze-batch \"" +
+        imgDir.string() + "\" \"" + masksDir.string() + "\" " + sceneMode + " \"" + outJson.string() + "\"";
+    if (runCmd(cmd) != 0 || !fs::exists(outJson)) return info;
+
+    std::ifstream in(outJson);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    std::string txt = ss.str();
+    info.archetype = extractJsonStringField(txt, "archetype");
+    info.what = extractJsonStringField(txt, "what");
+    info.where = extractJsonStringField(txt, "where");
+    if (info.archetype.empty()) info.archetype = "object";
+    info.valid = true;
+    return info;
+}
+
+double computeOrbitSpanDeg(const fs::path& imagesTxtPath) {
+    std::ifstream in(imagesTxtPath);
+    if (!in.is_open()) return 0.0;
+    struct CamPos { double x, y, z; };
+    std::vector<CamPos> cams;
+    std::string line;
+    bool expectPointsLine = false;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        if (expectPointsLine) { expectPointsLine = false; continue; }
+        std::istringstream iss(line);
+        int id = 0;
+        double qw, qx, qy, qz, tx, ty, tz;
+        if (!(iss >> id >> qw >> qx >> qy >> qz >> tx >> ty >> tz)) continue;
+        expectPointsLine = true;
+        // Camera center C = -R^T * t
+        double r00 = 1 - 2*qy*qy - 2*qz*qz, r01 = 2*qx*qy - 2*qz*qw, r02 = 2*qx*qz + 2*qy*qw;
+        double r10 = 2*qx*qy + 2*qz*qw,     r11 = 1 - 2*qx*qx - 2*qz*qz, r12 = 2*qy*qz - 2*qx*qw;
+        double r20 = 2*qx*qz - 2*qy*qw,     r21 = 2*qy*qz + 2*qx*qw,     r22 = 1 - 2*qx*qx - 2*qy*qy;
+        double cx = -(r00*tx + r10*ty + r20*tz);
+        double cy = -(r01*tx + r11*ty + r21*tz);
+        double cz = -(r02*tx + r12*ty + r22*tz);
+        cams.push_back({cx, cy, cz});
+    }
+    if (cams.size() < 2) return 0.0;
+    double mx = 0, mz = 0;
+    for (const auto& c : cams) { mx += c.x; mz += c.z; }
+    mx /= cams.size(); mz /= cams.size();
+    std::vector<double> angles;
+    for (const auto& c : cams) {
+        angles.push_back(std::atan2(c.z - mz, c.x - mx));
+    }
+    std::sort(angles.begin(), angles.end());
+    double maxGap = 0.0;
+    const double TWO_PI = 6.283185307179586;
+    for (size_t i = 0; i + 1 < angles.size(); ++i) {
+        maxGap = std::max(maxGap, angles[i + 1] - angles[i]);
+    }
+    maxGap = std::max(maxGap, (angles.front() + TWO_PI) - angles.back());
+    double spanRad = std::clamp(TWO_PI - maxGap, 0.0, TWO_PI);
+    return spanRad * 180.0 / 3.141592653589793;
+}
+
+void writeSceneReportJson(
+    const fs::path& outPath,
+    const AiSceneInfo& ai,
+    const std::string& why,
+    const std::string& how,
+    double orbitDeg,
+    int regViews,
+    int totalViews
+) {
+    std::ofstream out(outPath, std::ios::trunc);
+    out << "{\n"
+        << "  \"archetype\": \"" << jsonEscape(ai.archetype) << "\",\n"
+        << "  \"what\": \"" << jsonEscape(ai.what.empty() ? "3D Subject / Scene" : ai.what) << "\",\n"
+        << "  \"where\": \"" << jsonEscape(ai.where.empty() ? "Active frame region" : ai.where) << "\",\n"
+        << "  \"why\": \"" << jsonEscape(why) << "\",\n"
+        << "  \"how\": \"" << jsonEscape(how) << "\",\n"
+        << "  \"orbit_deg\": " << static_cast<int>(std::round(orbitDeg)) << ",\n"
+        << "  \"views_registered\": " << regViews << ",\n"
+        << "  \"total_views\": " << totalViews << "\n"
+        << "}\n";
 }
 
 std::vector<fs::path> deduplicateViews(const ToolConfig& cfg, const fs::path& imgDir, const fs::path& tmpDir) {
@@ -247,7 +426,8 @@ SubjectAnalysis analyzeSubject(
     const RGBImage& img,
     const std::string& sceneMode,
     float worldScale,
-    const std::vector<float>* aiDepthRaw
+    const std::vector<float>* aiDepthRaw,
+    const std::vector<uint8_t>* aiSegRaw = nullptr
 ) {
     SubjectAnalysis out;
     int w = img.width;
@@ -263,12 +443,25 @@ SubjectAnalysis analyzeSubject(
     out.zCenter.assign(n, 0.0f);
     out.aiNorm.assign(n, 0.5f);
     out.hasAiDepth = (aiDepthRaw != nullptr && static_cast<int>(aiDepthRaw->size()) == n);
+    bool hasSeg = (aiSegRaw != nullptr && static_cast<int>(aiSegRaw->size()) == n);
 
     for (int i = 0; i < n; ++i) {
         float r = img.rgb[i * 3 + 0] / 255.0f;
         float g = img.rgb[i * 3 + 1] / 255.0f;
         float b = img.rgb[i * 3 + 2] / 255.0f;
         out.lum[i] = 0.299f * r + 0.587f * g + 0.114f * b;
+    }
+
+    if (hasSeg && sceneMode != "full") {
+        // Use neural semantic map directly to strip sky (0) and separate foliage (3)
+        int skyCount = 0;
+        for (int i = 0; i < n; ++i) {
+            if ((*aiSegRaw)[i] == 0) { out.fg[i] = 0; skyCount++; }
+            else if ((*aiSegRaw)[i] == 3) out.foliage[i] = 1;
+        }
+        if (skyCount > n * 95 / 100) {
+            std::fill(out.fg.begin(), out.fg.end(), 1);
+        }
     }
 
     // 1. Border background detection
@@ -852,13 +1045,18 @@ bool reconstructDeepScan(
     float maxSide = static_cast<float>(std::max(w, h));
     float worldScale = 2.4f / maxSide;
 
+    std::vector<uint8_t> frontSegRaw;
     std::vector<float> frontAiRaw;
-    bool hasFrontAi = tryEstimateAiDepth(cfg, frontImgPath, tmpDir / "front_depth.pgm", w, h, frontAiRaw);
+    bool hasFrontAi = tryAiSemanticAndDepth(cfg, frontImgPath, tmpDir / "front_seg.pgm", tmpDir / "front_depth.pgm", w, h, frontSegRaw, frontAiRaw);
     if (hasFrontAi) {
-        logProgress(36, "Neural AI Depth Map computed (" + std::to_string(w) + "x" + std::to_string(h) + ").");
+        logProgress(36, "Neural Semantic + AI Depth Map computed (" + std::to_string(w) + "x" + std::to_string(h) + ").");
     }
 
-    SubjectAnalysis frontA = analyzeSubject(frontImg, sceneMode, worldScale, hasFrontAi ? &frontAiRaw : nullptr);
+    SubjectAnalysis frontA = analyzeSubject(
+        frontImg, sceneMode, worldScale,
+        hasFrontAi ? &frontAiRaw : nullptr,
+        frontSegRaw.empty() ? nullptr : &frontSegRaw
+    );
 
     fs::path frontTexPpm = tmpDir / "front_tex.ppm";
     RGBImage frontTexImg;
@@ -1271,6 +1469,16 @@ bool reconstructDeepScan(
 
     std::error_code ec;
     fs::remove_all(tmpDir, ec);
+    AiSceneInfo deepAi;
+    deepAi.archetype = frontA.isBotanicalTree ? "botanical" : (frontA.hasIsolatedSubject ? "object" : "scene");
+    deepAi.what = frontA.isBotanicalTree ? "Botanical Tree / Plant (AI Semantic + Depth)" : "3D Subject / Scene (AI Semantic + Depth)";
+    deepAi.where = frontA.hasIsolatedSubject ? "Subject isolated from sky/backdrop" : "Full-frame 3D relief";
+    writeSceneReportJson(
+        outDir / "scene_report.json", deepAi,
+        hasSecond ? "1-2 view AI Semantic + Depth reconstruction (upload 20-100+ 360 views for full multi-view mesh)" : "Single-view AI Semantic + Neural Depth reconstruction",
+        "SegFormer Semantic Map + Depth-Anything-V2-Small + Volumetric 3D Mesh",
+        hasSecond ? 90.0 : 0.0, hasSecond ? 2 : 1, hasSecond ? 2 : 1
+    );
     logProgress(100, "Deep-Scan 3D Model Ready! Loading in Studio...");
     return true;
 }
@@ -1408,7 +1616,22 @@ int main(int argc, char* argv[]) {
     std::string singleCam = (mode == "video") ? "1" : "0";
     std::string maxFeats = (preset == "lowpoly") ? "4096" : (preset == "balanced" ? "6144" : "8192");
 
+    logProgress(19, "AI Scene Understanding: analyzing What, Where, Why & Strategy...");
+    AiSceneInfo aiInfo = runAiUnderstandBatch(cfg, imgDir, masksDir, sceneMode, jobDir / "scene_ai.json");
+    if (aiInfo.valid) {
+        logProgress(20, "[AI-WHAT] " + aiInfo.what);
+        logProgress(21, "[AI-WHERE] " + aiInfo.where);
+    }
+
     auto prepareSubjectMasks = [&]() -> bool {
+        int existingMasks = 0;
+        if (fs::exists(masksDir)) {
+            for (const auto& entry : fs::directory_iterator(masksDir)) {
+                if (entry.is_regular_file()) existingMasks++;
+            }
+        }
+        if (existingMasks >= totalImages) return true; // Use pixel-accurate SegFormer masks!
+
         fs::path firstImg;
         for (const auto& entry : fs::directory_iterator(imgDir)) {
             if (entry.is_regular_file()) { firstImg = entry.path(); break; }
@@ -1524,12 +1747,14 @@ int main(int argc, char* argv[]) {
         if (sceneMode == "subject" || sceneMode == "tree") regViews = runSfmPass(true);
         else if (sceneMode == "full") regViews = runSfmPass(false);
         else {
-            regViews = runSfmPass(false);
+            // Smart Auto: use AI semantic mask first when SegFormer detected an isolated subject/character/architecture/tree
+            bool preferMask = aiInfo.valid && (aiInfo.archetype != "environment");
+            regViews = runSfmPass(preferMask);
             if (regViews < std::min(5, totalImages)) {
-                logProgress(22, "Only " + std::to_string(std::max(0, regViews)) + " full-frame views matched — retrying with Subject-Focus Background Mask...");
-                int maskedViews = runSfmPass(true);
-                if (maskedViews > regViews) regViews = maskedViews;
-                else if (regViews > 0) regViews = runSfmPass(false);
+                logProgress(22, "Only " + std::to_string(std::max(0, regViews)) + " views matched — retrying with alternate mask strategy...");
+                int altViews = runSfmPass(!preferMask);
+                if (altViews > regViews) regViews = altViews;
+                else if (regViews > 0) regViews = runSfmPass(preferMask);
             }
         }
     }
@@ -1545,6 +1770,12 @@ int main(int argc, char* argv[]) {
     logProgress(68, "Converting camera model to OpenMVS TXT format...");
     std::string convCmd = colmapCall + " model_converter --input_path \"" + (denseDir / "sparse").string() + "\" --output_path \"" + (denseDir / "sparse").string() + "\" --output_type TXT";
     if (runCmd(convCmd) != 0) { std::cerr << "[ERROR] COLMAP model_converter failed.\n"; return 7; }
+
+    double orbitDeg = computeOrbitSpanDeg(denseDir / "sparse" / "images.txt");
+    std::string whyCoverage = (orbitDeg >= 160.0)
+        ? ("Wide/360 camera orbit (" + std::to_string(static_cast<int>(std::round(orbitDeg))) + " deg) captured all sides cleanly.")
+        : ("Camera only orbited ~" + std::to_string(static_cast<int>(std::round(orbitDeg))) + " deg (partial/front arc) — unfilmed back surfaces cannot appear without 360-deg views.");
+    logProgress(71, "[AI-WHY] " + whyCoverage);
 
     logProgress(74, "Initializing OpenMVS scene...");
     std::string mvsInit = mvsExe(cfg, "InterfaceCOLMAP") + " -i dense -o scene.mvs --image-folder images";
@@ -1642,6 +1873,16 @@ int main(int argc, char* argv[]) {
             fs::remove(tmpObj, ec);
         }
     }
+
+    writeSceneReportJson(
+        outDir / "scene_report.json",
+        aiInfo,
+        whyCoverage,
+        "SegFormer Semantic Mask + COLMAP CUDA (" + std::to_string(regViews) + "/" + std::to_string(totalImages) + " views) + OpenMVS (" + preset + ")",
+        orbitDeg,
+        regViews,
+        totalImages
+    );
 
     logProgress(100, "3D Model Ready! Loading in Studio...");
     return 0;

@@ -169,7 +169,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	sceneMode := r.FormValue("scene_mode")
 	switch sceneMode {
-	case "auto", "subject", "full":
+	case "auto", "subject", "tree", "full":
 	default:
 		sceneMode = "auto"
 	}
@@ -230,7 +230,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	if !hasVideo && photoCount == 0 {
 		os.RemoveAll(jobDir)
-		http.Error(w, "Please upload a video or at least 3 photos.", http.StatusBadRequest)
+		http.Error(w, "Please upload a video or at least 1 photo.", http.StatusBadRequest)
 		return
 	}
 
