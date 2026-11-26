@@ -1,4 +1,4 @@
-// RathoreScan 3D Studio — C++17 Photogrammetry Pipeline Engine
+// RathoreScan 3D Studio — C++17 Photogrammetry & 1-2 Photo AI+Volumetric 3D Engine
 // Copyright (c) 2026 RathoreTech (https://github.com/mrrathoretech602/RathoreScan3D)
 // Licensed under the RathoreScan 3D Source-Available & Protected License (see LICENSE).
 
@@ -7,6 +7,9 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <queue>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <cstdlib>
 #include <algorithm>
@@ -18,6 +21,7 @@ struct ToolConfig {
     std::string ffmpeg = "ffmpeg";
     std::string colmap = "colmap";
     std::string openmvsDir = "";
+    std::string pythonBin = "python";
 };
 
 ToolConfig loadConfig(const std::string& path) {
@@ -32,14 +36,12 @@ ToolConfig loadConfig(const std::string& path) {
         std::string key = line.substr(0, pos);
         std::string val = line.substr(pos + 1);
         auto last = val.find_last_not_of(" \r\n\t");
-        if (last != std::string::npos) {
-            val.erase(last + 1);
-        } else {
-            val.clear();
-        }
+        if (last != std::string::npos) val.erase(last + 1);
+        else val.clear();
         if (key == "FFMPEG_BIN") cfg.ffmpeg = val;
         else if (key == "COLMAP_BIN") cfg.colmap = val;
         else if (key == "OPENMVS_DIR") cfg.openmvsDir = val;
+        else if (key == "PYTHON_BIN") cfg.pythonBin = val;
     }
     return cfg;
 }
@@ -84,9 +86,1198 @@ bool isImageExt(std::string ext) {
     return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".bmp";
 }
 
+struct RGBImage {
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> rgb; // size = width * height * 3
+};
+
+bool loadPPM(const fs::path& ppmPath, RGBImage& img) {
+    std::ifstream in(ppmPath, std::ios::binary);
+    if (!in.is_open()) return false;
+    auto nextToken = [&]() -> std::string {
+        std::string tok;
+        char c;
+        while (in.get(c)) {
+            if (std::isspace(static_cast<unsigned char>(c))) continue;
+            if (c == '#') {
+                std::string dummy;
+                std::getline(in, dummy);
+                continue;
+            }
+            tok.push_back(c);
+            while (in.get(c) && !std::isspace(static_cast<unsigned char>(c))) tok.push_back(c);
+            break;
+        }
+        return tok;
+    };
+    if (nextToken() != "P6") return false;
+    int w = std::stoi(nextToken());
+    int h = std::stoi(nextToken());
+    int maxVal = std::stoi(nextToken());
+    if (w <= 0 || h <= 0 || maxVal <= 0) return false;
+    img.width = w;
+    img.height = h;
+    img.rgb.resize(static_cast<size_t>(w) * static_cast<size_t>(h) * 3);
+    in.read(reinterpret_cast<char*>(img.rgb.data()), static_cast<std::streamsize>(img.rgb.size()));
+    return static_cast<size_t>(in.gcount()) == img.rgb.size();
+}
+
+bool loadPGM16(const fs::path& pgmPath, int expectedW, int expectedH, std::vector<float>& outDepth) {
+    std::ifstream in(pgmPath, std::ios::binary);
+    if (!in.is_open()) return false;
+    auto nextToken = [&]() -> std::string {
+        std::string tok;
+        char c;
+        while (in.get(c)) {
+            if (std::isspace(static_cast<unsigned char>(c))) continue;
+            if (c == '#') {
+                std::string dummy;
+                std::getline(in, dummy);
+                continue;
+            }
+            tok.push_back(c);
+            while (in.get(c) && !std::isspace(static_cast<unsigned char>(c))) tok.push_back(c);
+            break;
+        }
+        return tok;
+    };
+    if (nextToken() != "P5") return false;
+    int w = std::stoi(nextToken());
+    int h = std::stoi(nextToken());
+    int maxVal = std::stoi(nextToken());
+    if (w != expectedW || h != expectedH || maxVal <= 0) return false;
+
+    size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
+    std::vector<uint8_t> raw(n * 2);
+    in.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+    if (static_cast<size_t>(in.gcount()) != raw.size()) return false;
+
+    outDepth.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        uint16_t val = (static_cast<uint16_t>(raw[i * 2]) << 8) | static_cast<uint16_t>(raw[i * 2 + 1]);
+        outDepth[i] = static_cast<float>(val) / static_cast<float>(maxVal);
+    }
+    return true;
+}
+
+bool decodeImageToPPM(const ToolConfig& cfg, const fs::path& srcImg, const fs::path& dstPpm, int maxDim) {
+    std::string cmd = "\"" + cfg.ffmpeg + "\" -v error -y -i \"" + srcImg.string() +
+        "\" -vf \"scale='if(gt(iw,ih),min(" + std::to_string(maxDim) + ",iw),-2)':'if(gt(iw,ih),-2,min(" +
+        std::to_string(maxDim) + ",ih))':flags=lanczos\" -pix_fmt rgb24 -f image2 -vcodec ppm \"" +
+        dstPpm.string() + "\"";
+    return runCmd(cmd) == 0 && fs::exists(dstPpm);
+}
+
+bool tryEstimateAiDepth(const ToolConfig& cfg, const fs::path& srcImg, const fs::path& outPgm, int w, int h, std::vector<float>& aiDepth) {
+    fs::path script = fs::exists("engine/ai_depth.py")
+        ? fs::path("engine/ai_depth.py")
+        : fs::path("../engine/ai_depth.py");
+    if (!fs::exists(script)) return false;
+
+    std::string py = cfg.pythonBin.empty() ? "python" : ("\"" + cfg.pythonBin + "\"");
+    std::string cmd = py + " \"" + fs::absolute(script).string() + "\" \"" + srcImg.string() + "\" \"" +
+        outPgm.string() + "\" " + std::to_string(w) + " " + std::to_string(h);
+    if (runCmd(cmd) != 0 || !fs::exists(outPgm)) return false;
+    return loadPGM16(outPgm, w, h, aiDepth);
+}
+
+std::vector<fs::path> deduplicateViews(const ToolConfig& cfg, const fs::path& imgDir, const fs::path& tmpDir) {
+    std::vector<fs::path> allFiles;
+    for (const auto& entry : fs::directory_iterator(imgDir)) {
+        if (entry.is_regular_file() && isImageExt(entry.path().extension().string())) {
+            allFiles.push_back(entry.path());
+        }
+    }
+    std::sort(allFiles.begin(), allFiles.end());
+
+    std::vector<fs::path> uniqueFiles;
+    std::vector<std::vector<uint8_t>> uniqueThumbs;
+    fs::create_directories(tmpDir);
+
+    for (size_t i = 0; i < allFiles.size(); ++i) {
+        fs::path thumbPpm = tmpDir / ("thumb_" + std::to_string(i) + ".ppm");
+        std::string cmd = "\"" + cfg.ffmpeg + "\" -v error -y -i \"" + allFiles[i].string() +
+            "\" -vf \"scale=48:48:flags=area\" -pix_fmt rgb24 -f image2 -vcodec ppm \"" + thumbPpm.string() + "\"";
+        RGBImage thumb;
+        if (std::system(("cmd /S /C \"" + cmd + "\"").c_str()) != 0 || !loadPPM(thumbPpm, thumb)) {
+            uniqueFiles.push_back(allFiles[i]);
+            continue;
+        }
+        bool isDup = false;
+        for (const auto& prev : uniqueThumbs) {
+            if (prev.size() != thumb.rgb.size()) continue;
+            double diffSum = 0.0;
+            for (size_t k = 0; k < prev.size(); ++k) {
+                diffSum += std::abs(static_cast<int>(prev[k]) - static_cast<int>(thumb.rgb[k]));
+            }
+            if ((diffSum / static_cast<double>(prev.size())) < 4.5) {
+                isDup = true;
+                break;
+            }
+        }
+        if (!isDup) {
+            uniqueFiles.push_back(allFiles[i]);
+            uniqueThumbs.push_back(std::move(thumb.rgb));
+        }
+    }
+    return uniqueFiles;
+}
+
+struct SubjectAnalysis {
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> fg;      // 1 = foreground, 0 = background
+    std::vector<uint8_t> foliage; // 1 = leaf/foliage pixel, 0 = wood/solid
+    std::vector<uint8_t> alpha;   // 0..255 cutout alpha
+    std::vector<float> lum;       // 0..1 luminance
+    std::vector<float> depth;     // >= 0 half-thickness (isolated) or Z coord (full scene)
+    std::vector<float> zCenter;   // organic Z offset (for botanical canopy clusters)
+    std::vector<float> aiNorm;    // normalized 0..1 AI depth inside foreground
+    int minX = 0, maxX = 0, minY = 0, maxY = 0;
+    float trunkCenterX = 0.0f;
+    int trunkTopY = 0;
+    int fgCount = 0;
+    bool hasIsolatedSubject = false;
+    bool isBotanicalTree = false;
+    bool hasAiDepth = false;
+};
+
+SubjectAnalysis analyzeSubject(
+    const RGBImage& img,
+    const std::string& sceneMode,
+    float worldScale,
+    const std::vector<float>* aiDepthRaw
+) {
+    SubjectAnalysis out;
+    int w = img.width;
+    int h = img.height;
+    int n = w * h;
+    out.width = w;
+    out.height = h;
+    out.fg.assign(n, 1);
+    out.foliage.assign(n, 0);
+    out.alpha.assign(n, 255);
+    out.lum.assign(n, 0.0f);
+    out.depth.assign(n, 0.0f);
+    out.zCenter.assign(n, 0.0f);
+    out.aiNorm.assign(n, 0.5f);
+    out.hasAiDepth = (aiDepthRaw != nullptr && static_cast<int>(aiDepthRaw->size()) == n);
+
+    for (int i = 0; i < n; ++i) {
+        float r = img.rgb[i * 3 + 0] / 255.0f;
+        float g = img.rgb[i * 3 + 1] / 255.0f;
+        float b = img.rgb[i * 3 + 2] / 255.0f;
+        out.lum[i] = 0.299f * r + 0.587f * g + 0.114f * b;
+    }
+
+    // 1. Border background detection
+    double sumR = 0, sumG = 0, sumB = 0;
+    int borderCount = 0;
+    auto samplePixel = [&](int x, int y) {
+        size_t idx = (static_cast<size_t>(y) * w + x) * 3;
+        sumR += img.rgb[idx];
+        sumG += img.rgb[idx + 1];
+        sumB += img.rgb[idx + 2];
+        borderCount++;
+    };
+    for (int x = 0; x < w; ++x) {
+        samplePixel(x, 0);
+        if (h > 1) samplePixel(x, h - 1);
+    }
+    for (int y = 1; y < h - 1; ++y) {
+        samplePixel(0, y);
+        if (w > 1) samplePixel(w - 1, y);
+    }
+    double bgR = sumR / std::max(1, borderCount);
+    double bgG = sumG / std::max(1, borderCount);
+    double bgB = sumB / std::max(1, borderCount);
+
+    double varSum = 0.0;
+    auto accumVar = [&](int x, int y) {
+        size_t idx = (static_cast<size_t>(y) * w + x) * 3;
+        double dr = img.rgb[idx] - bgR;
+        double dg = img.rgb[idx + 1] - bgG;
+        double db = img.rgb[idx + 2] - bgB;
+        varSum += std::sqrt((dr * dr + dg * dg + db * db) / 3.0);
+    };
+    for (int x = 0; x < w; ++x) {
+        accumVar(x, 0);
+        if (h > 1) accumVar(x, h - 1);
+    }
+    for (int y = 1; y < h - 1; ++y) {
+        accumVar(0, y);
+        if (w > 1) accumVar(w - 1, y);
+    }
+    double borderStd = varSum / std::max(1, borderCount);
+
+    // Only isolate background in 'auto' mode when the image genuinely has a uniform studio backdrop (borderStd < 16.0).
+    // Complex scenes/portraits with dark/textured corners (borderStd >= 16) stay intact as full-frame AI-depth 3D scenes!
+    bool tryIsolate = (sceneMode != "full") && (borderStd < 16.0 || sceneMode == "subject" || sceneMode == "tree");
+    if (tryIsolate) {
+        double thresh = std::clamp(26.0 + borderStd * 1.4, 26.0, 62.0);
+        auto bgScoreAt = [&](int idx) -> double {
+            int r = img.rgb[idx * 3 + 0];
+            int g = img.rgb[idx * 3 + 1];
+            int b = img.rgb[idx * 3 + 2];
+            double dr = std::abs(r - bgR);
+            double dg = std::abs(g - bgG);
+            double db = std::abs(b - bgB);
+            return 0.55 * std::max({dr, dg, db}) + 0.45 * ((dr + dg + db) / 3.0);
+        };
+
+        std::vector<uint8_t> visited(n, 0);
+        std::queue<int> q;
+        for (int x = 0; x < w; ++x) {
+            int topIdx = x, botIdx = (h - 1) * w + x;
+            if (bgScoreAt(topIdx) < thresh * 1.2) { visited[topIdx] = 1; out.fg[topIdx] = 0; q.push(topIdx); }
+            if (bgScoreAt(botIdx) < thresh * 1.2) { visited[botIdx] = 1; out.fg[botIdx] = 0; q.push(botIdx); }
+        }
+        for (int y = 1; y < h - 1; ++y) {
+            int leftIdx = y * w, rightIdx = y * w + (w - 1);
+            if (bgScoreAt(leftIdx) < thresh * 1.2) { visited[leftIdx] = 1; out.fg[leftIdx] = 0; q.push(leftIdx); }
+            if (bgScoreAt(rightIdx) < thresh * 1.2) { visited[rightIdx] = 1; out.fg[rightIdx] = 0; q.push(rightIdx); }
+        }
+
+        const int dx[4] = {1, -1, 0, 0};
+        const int dy[4] = {0, 0, 1, -1};
+        while (!q.empty()) {
+            int cur = q.front();
+            q.pop();
+            int cx = cur % w, cy = cur / w;
+            for (int d = 0; d < 4; ++d) {
+                int nx = cx + dx[d], ny = cy + dy[d];
+                if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                int ni = ny * w + nx;
+                if (!visited[ni] && bgScoreAt(ni) < thresh) {
+                    visited[ni] = 1;
+                    out.fg[ni] = 0;
+                    q.push(ni);
+                }
+            }
+        }
+
+        bool isBrightWhiteBg = (bgR > 230 && bgG > 230 && bgB > 230 && borderStd < 22.0);
+        bool isPureBlackBg = (bgR < 22 && bgG < 22 && bgB < 22 && borderStd < 22.0);
+        if (isBrightWhiteBg || isPureBlackBg) {
+            for (int i = 0; i < n; ++i) {
+                if (out.fg[i] == 0) continue;
+                int r = img.rgb[i * 3 + 0], g = img.rgb[i * 3 + 1], b = img.rgb[i * 3 + 2];
+                int chroma = std::max({r, g, b}) - std::min({r, g, b});
+                if (isBrightWhiteBg && r > 224 && g > 224 && b > 224 && chroma < 24) out.fg[i] = 0;
+                else if (isPureBlackBg && r < 22 && g < 22 && b < 22 && chroma < 14) out.fg[i] = 0;
+            }
+        }
+
+        // 2-pass fringe defringing
+        for (int pass = 0; pass < 2; ++pass) {
+            std::vector<uint8_t> nextFg = out.fg;
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    int i = y * w + x;
+                    if (!out.fg[i]) continue;
+                    bool adjBg = !out.fg[i - 1] || !out.fg[i + 1] || !out.fg[i - w] || !out.fg[i + w];
+                    if (!adjBg) continue;
+                    int r = img.rgb[i * 3 + 0], g = img.rgb[i * 3 + 1], b = img.rgb[i * 3 + 2];
+                    int chroma = std::max({r, g, b}) - std::min({r, g, b});
+                    if (bgScoreAt(i) < thresh * 1.85 || (isBrightWhiteBg && out.lum[i] > 0.72f && chroma < 28)) {
+                        nextFg[i] = 0;
+                    }
+                }
+            }
+            out.fg.swap(nextFg);
+        }
+
+        std::vector<uint8_t> cleaned = out.fg;
+        for (int y = 1; y < h - 1; ++y) {
+            for (int x = 1; x < w - 1; ++x) {
+                int idx = y * w + x;
+                if (out.fg[idx] && (out.fg[idx - 1] + out.fg[idx + 1] + out.fg[idx - w] + out.fg[idx + w] == 0)) {
+                    cleaned[idx] = 0;
+                }
+            }
+        }
+        out.fg.swap(cleaned);
+    }
+
+    int fgCount = 0;
+    int greenCount = 0;
+    out.minX = w; out.maxX = -1; out.minY = h; out.maxY = -1;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int i = y * w + x;
+            if (out.fg[i]) {
+                fgCount++;
+                out.minX = std::min(out.minX, x);
+                out.maxX = std::max(out.maxX, x);
+                out.minY = std::min(out.minY, y);
+                out.maxY = std::max(out.maxY, y);
+                int r = img.rgb[i * 3 + 0], g = img.rgb[i * 3 + 1], b = img.rgb[i * 3 + 2];
+                if (g > r + 6 && g > b + 5) {
+                    greenCount++;
+                    out.foliage[i] = 1;
+                }
+            } else {
+                out.alpha[i] = 0;
+            }
+        }
+    }
+    if (fgCount < (n / 200)) {
+        std::fill(out.fg.begin(), out.fg.end(), 1);
+        std::fill(out.alpha.begin(), out.alpha.end(), 255);
+        fgCount = n;
+        out.minX = 0; out.maxX = w - 1; out.minY = 0; out.maxY = h - 1;
+    }
+    out.fgCount = fgCount;
+    out.hasIsolatedSubject = (fgCount < static_cast<int>(n * 0.94));
+
+    int subjH = std::max(1, out.maxY - out.minY);
+    int trunkBottomZoneY = out.maxY - std::max(4, subjH * 24 / 100);
+    double trunkXSum = 0.0;
+    int trunkPxCount = 0;
+    for (int y = trunkBottomZoneY; y <= out.maxY; ++y) {
+        for (int x = out.minX; x <= out.maxX; ++x) {
+            if (out.fg[y * w + x]) { trunkXSum += x; trunkPxCount++; }
+        }
+    }
+    out.trunkCenterX = (trunkPxCount > 0)
+        ? static_cast<float>(trunkXSum / trunkPxCount)
+        : (out.minX + out.maxX) * 0.5f;
+
+    int topMinX = w, topMaxX = -1, botMinX = w, botMaxX = -1;
+    int midY = out.minY + subjH * 55 / 100;
+    for (int y = out.minY; y <= out.maxY; ++y) {
+        for (int x = out.minX; x <= out.maxX; ++x) {
+            if (!out.fg[y * w + x]) continue;
+            if (y < midY) { topMinX = std::min(topMinX, x); topMaxX = std::max(topMaxX, x); }
+            else { botMinX = std::min(botMinX, x); botMaxX = std::max(botMaxX, x); }
+        }
+    }
+    int topSpan = (topMaxX >= topMinX) ? (topMaxX - topMinX) : 0;
+    int botSpan = (botMaxX >= botMinX) ? (botMaxX - botMinX) : 0;
+    float greenRatio = static_cast<float>(greenCount) / static_cast<float>(std::max(1, fgCount));
+    out.isBotanicalTree = (sceneMode == "tree") ||
+        (out.hasIsolatedSubject && (greenRatio > 0.10f || (topSpan > botSpan * 1.65f && subjH > 40)));
+
+    // Find trunk-to-canopy transition height (where green foliage or wide branching begins)
+    out.trunkTopY = out.minY + subjH * 55 / 100;
+    if (out.isBotanicalTree) {
+        for (int y = out.maxY; y >= out.minY; --y) {
+            int rowSpanMin = w, rowSpanMax = -1, rowGreen = 0, rowFg = 0;
+            for (int x = out.minX; x <= out.maxX; ++x) {
+                int i = y * w + x;
+                if (out.fg[i]) {
+                    rowFg++;
+                    rowSpanMin = std::min(rowSpanMin, x);
+                    rowSpanMax = std::max(rowSpanMax, x);
+                    if (out.foliage[i]) rowGreen++;
+                }
+            }
+            if (rowFg > 0 && (rowGreen > rowFg / 3 || (rowSpanMax - rowSpanMin) > std::max(28, topSpan / 4))) {
+                out.trunkTopY = y;
+                break;
+            }
+        }
+        // Clear accidental foliage flag inside trunk zone
+        for (int y = out.trunkTopY; y <= out.maxY; ++y) {
+            for (int x = out.minX; x <= out.maxX; ++x) {
+                out.foliage[y * w + x] = 0;
+            }
+        }
+    }
+
+    // Normalize AI depth strictly over foreground pixels (robust p02..p98 percentile)
+    if (out.hasAiDepth) {
+        std::vector<float> fgVals;
+        fgVals.reserve(fgCount);
+        for (int i = 0; i < n; ++i) {
+            if (out.fg[i]) fgVals.push_back((*aiDepthRaw)[i]);
+        }
+        if (!fgVals.empty()) {
+            std::sort(fgVals.begin(), fgVals.end());
+            float dLo = fgVals[fgVals.size() * 2 / 100];
+            float dHi = fgVals[fgVals.size() * 98 / 100];
+            float span = std::max(1e-4f, dHi - dLo);
+            for (int i = 0; i < n; ++i) {
+                out.aiNorm[i] = std::clamp(((*aiDepthRaw)[i] - dLo) / span, 0.0f, 1.0f);
+            }
+        }
+    }
+
+    // Foreground-only box blur helper
+    auto fgBoxBlur = [&](const std::vector<float>& src, int radius) {
+        std::vector<float> horiz(n, 0.0f), hcnt(n, 0.0f), res(n, 0.0f);
+        for (int y = 0; y < h; ++y) {
+            float sum = 0.0f, cnt = 0.0f;
+            for (int x = 0; x <= std::min(w - 1, radius); ++x) {
+                int i = y * w + x;
+                if (out.fg[i]) { sum += src[i]; cnt += 1.0f; }
+            }
+            for (int x = 0; x < w; ++x) {
+                int i = y * w + x;
+                if (cnt > 0.0f) { horiz[i] = sum / cnt; hcnt[i] = 1.0f; }
+                int addX = x + radius + 1, remX = x - radius;
+                if (addX < w && out.fg[y * w + addX]) { sum += src[y * w + addX]; cnt += 1.0f; }
+                if (remX >= 0 && out.fg[y * w + remX]) { sum -= src[y * w + remX]; cnt -= 1.0f; }
+            }
+        }
+        for (int x = 0; x < w; ++x) {
+            float sum = 0.0f, cnt = 0.0f;
+            for (int y = 0; y <= std::min(h - 1, radius); ++y) {
+                int i = y * w + x;
+                if (hcnt[i] > 0.0f) { sum += horiz[i]; cnt += 1.0f; }
+            }
+            for (int y = 0; y < h; ++y) {
+                int i = y * w + x;
+                if (out.fg[i]) res[i] = (cnt > 0.0f) ? (sum / cnt) : src[i];
+                int addY = y + radius + 1, remY = y - radius;
+                if (addY < h && hcnt[addY * w + x] > 0.0f) { sum += horiz[addY * w + x]; cnt += 1.0f; }
+                if (remY >= 0 && hcnt[remY * w + x] > 0.0f) { sum -= horiz[remY * w + x]; cnt -= 1.0f; }
+            }
+        }
+        return res;
+    };
+
+    std::vector<float> blurSmall = fgBoxBlur(out.lum, 2);
+    std::vector<float> blurWide = fgBoxBlur(out.lum, 14);
+
+    // FULL SCENE / ENVIRONMENT MODE (uses AI Depth directly for real perspective relief)
+    if (!out.hasIsolatedSubject) {
+        for (int i = 0; i < n; ++i) {
+            float baseZ = out.hasAiDepth ? ((out.aiNorm[i] - 0.35f) * 0.72f) : ((out.lum[i] - 0.5f) * 0.22f);
+            float micro = (out.lum[i] - blurSmall[i]) * 0.025f;
+            out.depth[i] = baseZ + micro;
+        }
+        // Softly limit extreme single-pixel Z cliffs so foreground objects pop out cleanly without stretching or tearing
+        float sceneMaxStep = 1.65f * worldScale;
+        for (int iter = 0; iter < 5; ++iter) {
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    int i = y * w + x;
+                    float nbAvg = 0.25f * (out.depth[i - 1] + out.depth[i + 1] + out.depth[i - w] + out.depth[i + w]);
+                    if (out.depth[i] > nbAvg + sceneMaxStep) out.depth[i] = nbAvg + sceneMaxStep;
+                    else if (out.depth[i] < nbAvg - sceneMaxStep) out.depth[i] = nbAvg - sceneMaxStep;
+                }
+            }
+        }
+        return out;
+    }
+
+    // ISOLATED SUBJECT: Two-pass Chamfer Distance Transform
+    std::vector<float> dist(n, 0.0f);
+    const float INF = 1e6f;
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int i = y * w + x;
+            dist[i] = out.fg[i] ? INF : 0.0f;
+        }
+    }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int i = y * w + x;
+            if (dist[i] == 0.0f) continue;
+            float d = dist[i];
+            if (x > 0) d = std::min(d, dist[i - 1] + 1.0f);
+            if (y > 0) d = std::min(d, dist[i - w] + 1.0f);
+            if (x > 0 && y > 0) d = std::min(d, dist[i - w - 1] + 1.4142f);
+            if (x + 1 < w && y > 0) d = std::min(d, dist[i - w + 1] + 1.4142f);
+            dist[i] = d;
+        }
+    }
+    for (int y = h - 1; y >= 0; --y) {
+        for (int x = w - 1; x >= 0; --x) {
+            int i = y * w + x;
+            if (dist[i] == 0.0f) continue;
+            float d = dist[i];
+            if (x + 1 < w) d = std::min(d, dist[i + 1] + 1.0f);
+            if (y + 1 < h) d = std::min(d, dist[i + w] + 1.0f);
+            if (x + 1 < w && y + 1 < h) d = std::min(d, dist[i + w + 1] + 1.4142f);
+            if (x > 0 && y + 1 < h) d = std::min(d, dist[i + w - 1] + 1.4142f);
+            dist[i] = d;
+        }
+    }
+
+    float maxDist = 1.0f;
+    for (int i = 0; i < n; ++i) {
+        if (out.fg[i] && dist[i] < INF * 0.5f) maxDist = std::max(maxDist, dist[i]);
+    }
+
+    // Local ridge radius R(x,y)
+    std::vector<float> ridgeR = dist;
+    int ridgeRad = std::max(4, std::min(w, h) / 48);
+    for (int pass = 0; pass < 2; ++pass) {
+        std::vector<float> tmp = ridgeR;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int i = y * w + x;
+                if (!out.fg[i]) continue;
+                float best = ridgeR[i];
+                for (int kx = std::max(0, x - ridgeRad); kx <= std::min(w - 1, x + ridgeRad); ++kx)
+                    best = std::max(best, ridgeR[y * w + kx]);
+                tmp[i] = best;
+            }
+        }
+        ridgeR = tmp;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int i = y * w + x;
+                if (!out.fg[i]) continue;
+                float best = ridgeR[i];
+                for (int ky = std::max(0, y - ridgeRad); ky <= std::min(h - 1, y + ridgeRad); ++ky)
+                    best = std::max(best, ridgeR[ky * w + x]);
+                tmp[i] = best;
+            }
+        }
+        ridgeR.swap(tmp);
+    }
+
+    float subjHalfWidthWorld = std::max(0.15f, (out.maxX - out.minX) * 0.5f * worldScale);
+    float targetObjDepth = std::clamp(subjHalfWidthWorld * 0.42f, 0.12f, 0.28f);
+    std::vector<float> aiSmooth = out.hasAiDepth ? fgBoxBlur(out.aiNorm, 6) : std::vector<float>(n, 0.5f);
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int i = y * w + x;
+            if (!out.fg[i]) { out.depth[i] = 0.0f; continue; }
+            bool isRim = (x == 0 || y == 0 || x == w - 1 || y == h - 1 ||
+                          !out.fg[i - 1] || !out.fg[i + 1] || !out.fg[i - w] || !out.fg[i + w]);
+            if (isRim) { out.depth[i] = 0.0f; continue; }
+
+            float d = dist[i];
+            if (out.isBotanicalTree) {
+                if (out.foliage[i]) {
+                    // Keep foliage crisp & thin (<= 0.005) so ZERO fat horizontal stripes appear!
+                    float leafRamp = std::min(1.0f, d / 3.0f);
+                    float leafMicro = (out.lum[i] - blurSmall[i]) * 0.003f;
+                    out.depth[i] = std::max(0.0008f, 0.0045f * leafRamp + leafMicro);
+
+                    // Real 3D canopy Z distribution using AI depth + organic branch waves
+                    float relY = static_cast<float>(out.maxY - y) / static_cast<float>(subjH);
+                    float offX = (static_cast<float>(x) - out.trunkCenterX) * worldScale;
+                    float aiShift = out.hasAiDepth ? ((aiSmooth[i] - 0.5f) * 0.26f) : 0.0f;
+                    float organicWave = std::sin(offX * 4.5f + relY * 5.5f) * 0.065f + (blurWide[i] - 0.45f) * 0.08f;
+                    out.zCenter[i] = aiShift + organicWave;
+                } else {
+                    // Woody branches/trunk: true 1:1 round cylindrical cross-section
+                    float R = std::max(d, std::min(ridgeR[i], 12.0f));
+                    float cylPx = std::sqrt(std::max(0.0f, R * R - (R - d) * (R - d)));
+                    float branchThickness = std::min(0.032f, cylPx * worldScale * 1.0f);
+                    float barkMicro = (out.lum[i] - blurSmall[i]) * 0.003f;
+                    out.depth[i] = std::max(0.0008f, branchThickness + barkMicro);
+
+                    float relY = static_cast<float>(out.maxY - y) / static_cast<float>(subjH);
+                    float branchWeight = std::clamp((relY - 0.30f) / 0.45f, 0.0f, 1.0f);
+                    float aiShift = out.hasAiDepth ? ((aiSmooth[i] - 0.5f) * 0.14f) : 0.0f;
+                    out.zCenter[i] = branchWeight * aiShift;
+                }
+            } else {
+                // General object / product / statue / person / car:
+                // Combine AI Semantic Depth + Smooth Ellipsoidal Volume + Micro Surface Relief
+                float R = std::max(d, ridgeR[i]);
+                float cylNorm = std::sqrt(std::max(0.0f, R * R - (R - d) * (R - d))) / std::max(1.0f, maxDist);
+                float rimTaper = std::min(1.0f, std::sqrt(d / std::max(3.0f, maxDist * 0.18f)));
+                float aiPart = out.hasAiDepth ? (0.45f + 0.55f * out.aiNorm[i]) : 0.70f;
+                float volPart = (0.45f + 0.55f * cylNorm);
+                float baseDepth = targetObjDepth * rimTaper * (out.hasAiDepth ? (0.42f * aiPart + 0.58f * volPart) : volPart);
+                float relief = ((blurSmall[i] - blurWide[i]) * 0.25f + (out.lum[i] - blurSmall[i]) * 0.18f) * targetObjDepth;
+                out.depth[i] = std::max(0.0015f, baseDepth + rimTaper * relief);
+            }
+        }
+    }
+
+    // CRITICAL FIX: Iterative Slope-Limiter (|dz/dxy| <= 1.15 * worldScale) eliminates ALL barcode texture-smear stripes!
+    float maxStep = (out.isBotanicalTree ? 0.95f : 1.15f) * worldScale;
+    for (int iter = 0; iter < 6; ++iter) {
+        for (int y = 1; y < h - 1; ++y) {
+            for (int x = 1; x < w - 1; ++x) {
+                int i = y * w + x;
+                if (out.depth[i] <= 0.0f) continue;
+                float nbMin = std::min({out.depth[i - 1], out.depth[i + 1], out.depth[i - w], out.depth[i + w]});
+                if (out.depth[i] > nbMin + maxStep) out.depth[i] = nbMin + maxStep;
+            }
+        }
+        for (int y = h - 2; y >= 1; --y) {
+            for (int x = w - 2; x >= 1; --x) {
+                int i = y * w + x;
+                if (out.depth[i] <= 0.0f) continue;
+                float nbMin = std::min({out.depth[i - 1], out.depth[i + 1], out.depth[i - w], out.depth[i + w]});
+                if (out.depth[i] > nbMin + maxStep) out.depth[i] = nbMin + maxStep;
+            }
+        }
+    }
+
+    // 4-pass Laplacian smoothing on interior depth after slope-limiting for silky-smooth organic 3D curvature (no pyramid facets!)
+    int smoothPasses = out.isBotanicalTree ? 2 : 5;
+    for (int sp = 0; sp < smoothPasses; ++sp) {
+        std::vector<float> smoothD = out.depth;
+        for (int y = 1; y < h - 1; ++y) {
+            for (int x = 1; x < w - 1; ++x) {
+                int i = y * w + x;
+                if (out.depth[i] <= 0.0f) continue;
+                smoothD[i] = (out.depth[i] * 4.0f + out.depth[i - 1] + out.depth[i + 1] + out.depth[i - w] + out.depth[i + w]) / 8.0f;
+            }
+        }
+        out.depth.swap(smoothD);
+    }
+
+    if (out.isBotanicalTree) {
+        float maxZCenterStep = 0.70f * worldScale;
+        for (int iter = 0; iter < 6; ++iter) {
+            std::vector<float> nextZc = out.zCenter;
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    int i = y * w + x;
+                    if (!out.fg[i]) continue;
+                    float sum = 0.0f;
+                    int cnt = 0;
+                    const int nbs[4] = {i - 1, i + 1, i - w, i + w};
+                    for (int nb : nbs) {
+                        if (out.fg[nb]) { sum += out.zCenter[nb]; cnt++; }
+                    }
+                    if (cnt > 0) {
+                        float avg = sum / static_cast<float>(cnt);
+                        float diff = out.zCenter[i] - avg;
+                        if (diff > maxZCenterStep) nextZc[i] = avg + maxZCenterStep;
+                        else if (diff < -maxZCenterStep) nextZc[i] = avg - maxZCenterStep;
+                        else nextZc[i] = 0.5f * out.zCenter[i] + 0.5f * avg;
+                    }
+                }
+            }
+            out.zCenter.swap(nextZc);
+        }
+    }
+    return out;
+}
+
+bool writeDilatedRGBATexture(
+    const ToolConfig& cfg,
+    const RGBImage& img,
+    const SubjectAnalysis& subj,
+    const fs::path& tmpDir,
+    const fs::path& dstPng
+) {
+    int w = img.width, h = img.height, n = w * h;
+    std::vector<uint8_t> rgbOut = img.rgb;
+    std::vector<uint8_t> filled = subj.fg;
+    const int dx[8] = {1, -1, 0, 0, 1, -1, 1, -1};
+    const int dy[8] = {0, 0, 1, -1, 1, 1, -1, -1};
+
+    for (int pass = 0; pass < 10; ++pass) {
+        std::vector<uint8_t> nextRgb = rgbOut;
+        std::vector<uint8_t> nextFilled = filled;
+        bool changed = false;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int i = y * w + x;
+                if (filled[i]) continue;
+                int sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+                for (int d = 0; d < 8; ++d) {
+                    int nx = x + dx[d], ny = y + dy[d];
+                    if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                    int ni = ny * w + nx;
+                    if (!filled[ni]) continue;
+                    sumR += rgbOut[ni * 3 + 0];
+                    sumG += rgbOut[ni * 3 + 1];
+                    sumB += rgbOut[ni * 3 + 2];
+                    cnt++;
+                }
+                if (cnt > 0) {
+                    nextRgb[i * 3 + 0] = static_cast<uint8_t>(sumR / cnt);
+                    nextRgb[i * 3 + 1] = static_cast<uint8_t>(sumG / cnt);
+                    nextRgb[i * 3 + 2] = static_cast<uint8_t>(sumB / cnt);
+                    nextFilled[i] = 1;
+                    changed = true;
+                }
+            }
+        }
+        rgbOut.swap(nextRgb);
+        filled.swap(nextFilled);
+        if (!changed) break;
+    }
+
+    fs::path pamPath = tmpDir / (dstPng.stem().string() + ".pam");
+    {
+        std::ofstream pam(pamPath, std::ios::binary | std::ios::trunc);
+        if (!pam.is_open()) return false;
+        pam << "P7\nWIDTH " << w << "\nHEIGHT " << h << "\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n";
+        std::vector<uint8_t> rgba(static_cast<size_t>(n) * 4);
+        for (int i = 0; i < n; ++i) {
+            rgba[i * 4 + 0] = rgbOut[i * 3 + 0];
+            rgba[i * 4 + 1] = rgbOut[i * 3 + 1];
+            rgba[i * 4 + 2] = rgbOut[i * 3 + 2];
+            rgba[i * 4 + 3] = subj.alpha[i];
+        }
+        pam.write(reinterpret_cast<const char*>(rgba.data()), static_cast<std::streamsize>(rgba.size()));
+    }
+
+    std::string cmd = "\"" + cfg.ffmpeg + "\" -v error -y -i \"" + pamPath.string() + "\" \"" + dstPng.string() + "\"";
+    return runCmd(cmd) == 0 && fs::exists(dstPng);
+}
+
+bool reconstructDeepScan(
+    const ToolConfig& cfg,
+    const fs::path& jobDir,
+    const fs::path& frontImgPath,
+    const fs::path& backImgPath,
+    const std::string& preset,
+    const std::string& sceneMode
+) {
+    int gridMaxDim = 340;
+    int texMaxDim = 1024;
+    if (preset == "lowpoly") { gridMaxDim = 220; texMaxDim = 720; }
+    else if (preset == "balanced") { gridMaxDim = 340; texMaxDim = 1024; }
+    else if (preset == "highpoly") { gridMaxDim = 440; texMaxDim = 1440; }
+    else if (preset == "ultra") { gridMaxDim = 540; texMaxDim = 1800; }
+
+    fs::path outDir = jobDir / "output";
+    fs::path tmpDir = jobDir / "deep_tmp";
+    fs::create_directories(outDir);
+    fs::create_directories(tmpDir);
+
+    bool hasSecond = !backImgPath.empty() && fs::exists(backImgPath);
+    logProgress(26, "Deep-Scan: Decoding & running Neural Depth + Silhouette Analysis...");
+
+    fs::path frontPpm = tmpDir / "front_work.ppm";
+    if (!decodeImageToPPM(cfg, frontImgPath, frontPpm, gridMaxDim)) {
+        std::cerr << "[ERROR] Failed to decode front image.\n";
+        return false;
+    }
+    RGBImage frontImg;
+    if (!loadPPM(frontPpm, frontImg)) {
+        std::cerr << "[ERROR] Failed to load front working PPM.\n";
+        return false;
+    }
+
+    int w = frontImg.width, h = frontImg.height;
+    float maxSide = static_cast<float>(std::max(w, h));
+    float worldScale = 2.4f / maxSide;
+
+    std::vector<float> frontAiRaw;
+    bool hasFrontAi = tryEstimateAiDepth(cfg, frontImgPath, tmpDir / "front_depth.pgm", w, h, frontAiRaw);
+    if (hasFrontAi) {
+        logProgress(36, "Neural AI Depth Map computed (" + std::to_string(w) + "x" + std::to_string(h) + ").");
+    }
+
+    SubjectAnalysis frontA = analyzeSubject(frontImg, sceneMode, worldScale, hasFrontAi ? &frontAiRaw : nullptr);
+
+    fs::path frontTexPpm = tmpDir / "front_tex.ppm";
+    RGBImage frontTexImg;
+    if (texMaxDim > gridMaxDim && decodeImageToPPM(cfg, frontImgPath, frontTexPpm, texMaxDim) && loadPPM(frontTexPpm, frontTexImg)) {
+        // ok
+    } else {
+        frontTexImg = frontImg;
+    }
+    SubjectAnalysis frontTexA = (frontTexImg.width == w && frontTexImg.height == h)
+        ? frontA
+        : analyzeSubject(frontTexImg, sceneMode, 2.4f / static_cast<float>(std::max(frontTexImg.width, frontTexImg.height)), nullptr);
+    if (!writeDilatedRGBATexture(cfg, frontTexImg, frontTexA, tmpDir, outDir / "texture_front.png")) {
+        std::cerr << "[ERROR] Failed to generate texture_front.png.\n";
+        return false;
+    }
+
+    RGBImage secondImg;
+    SubjectAnalysis secondA;
+    bool useSecond = false;
+    bool secondMatchesFront = false;
+
+    if (hasSecond) {
+        logProgress(50, "Analyzing 2nd photo with Neural Depth & Silhouette Alignment...");
+        fs::path secondPpm = tmpDir / "second_work.ppm";
+        if (decodeImageToPPM(cfg, backImgPath, secondPpm, gridMaxDim) && loadPPM(secondPpm, secondImg)) {
+            int sw = secondImg.width, sh = secondImg.height;
+            float secWorldScale = 2.4f / static_cast<float>(std::max(sw, sh));
+            std::vector<float> secAiRaw;
+            bool hasSecAi = tryEstimateAiDepth(cfg, backImgPath, tmpDir / "second_depth.pgm", sw, sh, secAiRaw);
+            secondA = analyzeSubject(secondImg, sceneMode, secWorldScale, hasSecAi ? &secAiRaw : nullptr);
+
+            fs::path secondTexPpm = tmpDir / "second_tex.ppm";
+            RGBImage secondTexImg;
+            if (texMaxDim > gridMaxDim && decodeImageToPPM(cfg, backImgPath, secondTexPpm, texMaxDim) && loadPPM(secondTexPpm, secondTexImg)) {
+                // ok
+            } else {
+                secondTexImg = secondImg;
+            }
+            SubjectAnalysis secondTexA = (secondTexImg.width == sw && secondTexImg.height == sh)
+                ? secondA
+                : analyzeSubject(secondTexImg, sceneMode, 2.4f / static_cast<float>(std::max(secondTexImg.width, secondTexImg.height)), nullptr);
+
+            if (writeDilatedRGBATexture(cfg, secondTexImg, secondTexA, tmpDir, outDir / "texture_back.png")) {
+                useSecond = true;
+                int fSpanX = std::max(1, frontA.maxX - frontA.minX);
+                int fSpanY = std::max(1, frontA.maxY - frontA.minY);
+                int sSpanX = std::max(1, secondA.maxX - secondA.minX);
+                int sSpanY = std::max(1, secondA.maxY - secondA.minY);
+                int inter = 0, uni = 0;
+                const int S = 64;
+                for (int sy = 0; sy < S; ++sy) {
+                    for (int sx = 0; sx < S; ++sx) {
+                        int fx = std::clamp(frontA.minX + (sx * fSpanX) / S, 0, frontA.width - 1);
+                        int fy = std::clamp(frontA.minY + (sy * fSpanY) / S, 0, frontA.height - 1);
+                        int bx = std::clamp(secondA.maxX - (sx * sSpanX) / S, 0, secondA.width - 1);
+                        int by = std::clamp(secondA.minY + (sy * sSpanY) / S, 0, secondA.height - 1);
+                        bool ff = frontA.fg[fy * frontA.width + fx] != 0;
+                        bool bf = secondA.fg[by * secondA.width + bx] != 0;
+                        if (ff && bf) inter++;
+                        if (ff || bf) uni++;
+                    }
+                }
+                float iou = uni > 0 ? static_cast<float>(inter) / static_cast<float>(uni) : 0.0f;
+                secondMatchesFront = (iou >= 0.48f);
+            }
+        }
+    }
+
+    struct Vec3 { float x, y, z; };
+    struct Vec2 { float u, v; };
+    struct Tri { int a, b, c; int mat; };
+
+    std::vector<Vec3> verts;
+    std::vector<Vec2> uvs;
+    std::vector<Tri> tris;
+
+    // Helper: Full-scene perspective surface reconstruction (with depth-jump tear guard)
+    if (!frontA.hasIsolatedSubject) {
+        logProgress(72, "Synthesizing 3D Scene Geometry from Neural AI Depth...");
+        std::vector<int> idxGrid(w * h, -1);
+        float cx = w * 0.5f, cy = h * 0.5f;
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int i = y * w + x;
+                float z = frontA.depth[i];
+                float perspScale = 1.0f + std::max(0.0f, -z * 0.35f);
+                float wx = (static_cast<float>(x) - cx) * worldScale * perspScale;
+                float wy = (cy - static_cast<float>(y)) * worldScale * perspScale;
+                float u = static_cast<float>(x) / static_cast<float>(std::max(1, w - 1));
+                float v = 1.0f - (static_cast<float>(y) / static_cast<float>(std::max(1, h - 1)));
+                idxGrid[i] = static_cast<int>(verts.size());
+                verts.push_back({wx, wy, z});
+                uvs.push_back({u, v});
+            }
+        }
+        for (int y = 0; y < h - 1; ++y) {
+            for (int x = 0; x < w - 1; ++x) {
+                int v00 = idxGrid[y * w + x], v10 = idxGrid[y * w + x + 1];
+                int v01 = idxGrid[(y + 1) * w + x], v11 = idxGrid[(y + 1) * w + x + 1];
+                tris.push_back({v00, v01, v11, 0});
+                tris.push_back({v00, v11, v10, 0});
+            }
+        }
+    } else {
+        // Isolated Subject Mode (Tree OR General 3D Object)
+        auto appendShell = [&](
+            const SubjectAnalysis& A,
+            const SubjectAnalysis* backOverride,
+            float shellWorldScale,
+            float rotYRad,
+            float scaleXZ,
+            float scaleY,
+            int matFront,
+            int matBack,
+            bool skipLowerTrunk,
+            bool orthogonalSideModulate
+        ) {
+            int sw = A.width, sh = A.height;
+            float pivotX = A.trunkCenterX;
+            float bottomY = static_cast<float>(A.maxY);
+            float cosR = std::cos(rotYRad), sinR = std::sin(rotYRad);
+
+            std::vector<int> fIdx(sw * sh, -1);
+            std::vector<int> bIdx(sw * sh, -1);
+
+            int fSpanX = std::max(1, A.maxX - A.minX);
+            int fSpanY = std::max(1, A.maxY - A.minY);
+            int bSpanX = backOverride ? std::max(1, backOverride->maxX - backOverride->minX) : 1;
+            int bSpanY = backOverride ? std::max(1, backOverride->maxY - backOverride->minY) : 1;
+
+            // Optional side-view horizontal width profile for 90-deg Front+Side visual hull depth scaling
+            std::vector<float> sideDepthFactor(sh, 1.0f);
+            if (orthogonalSideModulate && backOverride) {
+                float avgSideSpan = 0.0f;
+                int cntRows = 0;
+                std::vector<float> rowSpan(sh, 0.0f);
+                for (int y = A.minY; y <= A.maxY; ++y) {
+                    float relY = static_cast<float>(y - A.minY) / static_cast<float>(fSpanY);
+                    int sy = std::clamp(backOverride->minY + static_cast<int>(std::round(relY * bSpanY)), 0, backOverride->height - 1);
+                    int sMin = backOverride->width, sMax = -1;
+                    for (int sx = backOverride->minX; sx <= backOverride->maxX; ++sx) {
+                        if (backOverride->fg[sy * backOverride->width + sx]) {
+                            sMin = std::min(sMin, sx);
+                            sMax = std::max(sMax, sx);
+                        }
+                    }
+                    if (sMax >= sMin) {
+                        rowSpan[y] = static_cast<float>(sMax - sMin + 1);
+                        avgSideSpan += rowSpan[y];
+                        cntRows++;
+                    }
+                }
+                if (cntRows > 0) {
+                    avgSideSpan /= static_cast<float>(cntRows);
+                    for (int y = A.minY; y <= A.maxY; ++y) {
+                        if (rowSpan[y] > 0.0f && avgSideSpan > 1.0f) {
+                            sideDepthFactor[y] = std::clamp(rowSpan[y] / avgSideSpan, 0.45f, 1.85f);
+                        }
+                    }
+                }
+            }
+
+            auto pushRotatedVert = [&](float lx, float ly, float lz, float u, float v) -> int {
+                float sx = lx * scaleXZ;
+                float sy = ly * scaleY;
+                float sz = lz * scaleXZ;
+                float rx = sx * cosR + sz * sinR;
+                float rz = -sx * sinR + sz * cosR;
+                int id = static_cast<int>(verts.size());
+                verts.push_back({rx, sy, rz});
+                uvs.push_back({u, v});
+                return id;
+            };
+
+            for (int y = 0; y < sh; ++y) {
+                if (skipLowerTrunk && y > A.trunkTopY + 2) continue;
+                for (int x = 0; x < sw; ++x) {
+                    int i = y * sw + x;
+                    if (!A.fg[i]) continue;
+
+                    float lx = (static_cast<float>(x) - pivotX) * shellWorldScale;
+                    float ly = (bottomY - static_cast<float>(y)) * shellWorldScale;
+                    float zc = A.zCenter[i];
+                    float dMod = A.depth[i] * sideDepthFactor[y];
+                    float zf = zc + dMod;
+                    float zb = zc - dMod;
+
+                    float u = static_cast<float>(x) / static_cast<float>(std::max(1, sw - 1));
+                    float v = 1.0f - (static_cast<float>(y) / static_cast<float>(std::max(1, sh - 1)));
+
+                    fIdx[i] = pushRotatedVert(lx, ly, zf, u, v);
+
+                    float bu = u, bv = v;
+                    if (backOverride && secondMatchesFront) {
+                        float relX = static_cast<float>(x - A.minX) / static_cast<float>(fSpanX);
+                        float relY = static_cast<float>(y - A.minY) / static_cast<float>(fSpanY);
+                        int bx = std::clamp(backOverride->maxX - static_cast<int>(std::round(relX * bSpanX)), 0, backOverride->width - 1);
+                        int by = std::clamp(backOverride->minY + static_cast<int>(std::round(relY * bSpanY)), 0, backOverride->height - 1);
+                        int bi = by * backOverride->width + bx;
+                        if (A.depth[i] <= 0.0f) {
+                            zb = zc;
+                        } else if (backOverride->fg[bi]) {
+                            zb = zc - (0.5f * dMod + 0.5f * backOverride->depth[bi]);
+                            bu = static_cast<float>(bx) / static_cast<float>(std::max(1, backOverride->width - 1));
+                            bv = 1.0f - (static_cast<float>(by) / static_cast<float>(std::max(1, backOverride->height - 1)));
+                        }
+                    }
+
+                    bIdx[i] = pushRotatedVert(lx, ly, zb, bu, bv);
+                }
+            }
+
+            for (int y = 0; y < sh - 1; ++y) {
+                for (int x = 0; x < sw - 1; ++x) {
+                    int i00 = y * sw + x, i10 = y * sw + (x + 1);
+                    int i01 = (y + 1) * sw + x, i11 = (y + 1) * sw + (x + 1);
+                    int f00 = fIdx[i00], f10 = fIdx[i10], f01 = fIdx[i01], f11 = fIdx[i11];
+                    int b00 = bIdx[i00], b10 = bIdx[i10], b01 = bIdx[i01], b11 = bIdx[i11];
+                    int validCount = (f00 >= 0) + (f10 >= 0) + (f01 >= 0) + (f11 >= 0);
+
+                    if (validCount == 4) {
+                        tris.push_back({f00, f01, f11, matFront});
+                        tris.push_back({f00, f11, f10, matFront});
+                        tris.push_back({b00, b11, b01, matBack});
+                        tris.push_back({b00, b10, b11, matBack});
+                    } else if (validCount == 3) {
+                        if (f00 < 0) {
+                            tris.push_back({f10, f01, f11, matFront});
+                            tris.push_back({b10, b11, b01, matBack});
+                        } else if (f10 < 0) {
+                            tris.push_back({f00, f01, f11, matFront});
+                            tris.push_back({b00, b11, b01, matBack});
+                        } else if (f01 < 0) {
+                            tris.push_back({f00, f11, f10, matFront});
+                            tris.push_back({b00, b10, b11, matBack});
+                        } else if (f11 < 0) {
+                            tris.push_back({f00, f01, f10, matFront});
+                            tris.push_back({b00, b10, b01, matBack});
+                        }
+                    }
+                }
+            }
+        };
+
+        // Helper: True 16-segment cylindrical 3D trunk mesh following exact photo trunk curve & taper!
+        auto appendCylindricalTrunk = [&](const SubjectAnalysis& A, float shellWorldScale) {
+            int sw = A.width, sh = A.height;
+            float pivotX = A.trunkCenterX;
+            float bottomY = static_cast<float>(A.maxY);
+            const int SEGS = 16;
+            std::vector<std::vector<int>> rings;
+
+            for (int y = A.maxY; y >= A.trunkTopY; y -= 2) {
+                // Find widest contiguous trunk segment nearest pivotX
+                int bestL = -1, bestR = -1;
+                float bestDist = 1e9f;
+                int x = A.minX;
+                while (x <= A.maxX) {
+                    if (!A.fg[y * sw + x]) { x++; continue; }
+                    int l = x;
+                    while (x <= A.maxX && A.fg[y * sw + x]) x++;
+                    int r = x - 1;
+                    float segCenter = 0.5f * (l + r);
+                    float dc = std::abs(segCenter - pivotX);
+                    if (dc < bestDist) { bestDist = dc; bestL = l; bestR = r; }
+                }
+                if (bestL < 0 || (bestR - bestL) < 2) continue;
+
+                float segCenter = 0.5f * (bestL + bestR);
+                float radiusPx = std::max(1.5f, 0.5f * (bestR - bestL));
+                // Stop if canopy/fork starts spreading dramatically
+                if (radiusPx > (A.maxX - A.minX) * 0.14f && y < A.maxY - (A.maxY - A.minY) * 20 / 100) break;
+
+                float cx = (segCenter - pivotX) * shellWorldScale;
+                float cy = (bottomY - static_cast<float>(y)) * shellWorldScale;
+                float radW = radiusPx * shellWorldScale * 1.05f;
+                float vCoord = 1.0f - (static_cast<float>(y) / static_cast<float>(std::max(1, sh - 1)));
+                float uL = static_cast<float>(bestL + 1) / static_cast<float>(std::max(1, sw - 1));
+                float uR = static_cast<float>(bestR - 1) / static_cast<float>(std::max(1, sw - 1));
+                if (uR < uL) std::swap(uL, uR);
+
+                std::vector<int> ring;
+                ring.reserve(SEGS + 1);
+                for (int s = 0; s <= SEGS; ++s) {
+                    float theta = (static_cast<float>(s) / static_cast<float>(SEGS)) * 6.2831853f;
+                    float vx = cx + radW * std::cos(theta);
+                    float vz = radW * std::sin(theta);
+                    // Wrap bark UV cleanly front & back across trunk width (zero white edge!)
+                    float tU = 0.5f + 0.5f * std::cos(theta);
+                    float uCoord = uL + tU * (uR - uL);
+                    ring.push_back(static_cast<int>(verts.size()));
+                    verts.push_back({vx, cy, vz});
+                    uvs.push_back({uCoord, vCoord});
+                }
+                rings.push_back(std::move(ring));
+            }
+
+            for (size_t r = 0; r + 1 < rings.size(); ++r) {
+                for (int s = 0; s < SEGS; ++s) {
+                    int a = rings[r][s];
+                    int b = rings[r][s + 1];
+                    int c = rings[r + 1][s + 1];
+                    int d = rings[r + 1][s];
+                    tris.push_back({a, b, c, 0});
+                    tris.push_back({a, c, d, 0});
+                }
+            }
+        };
+
+        if (frontA.isBotanicalTree) {
+            logProgress(74, "Building 3D cylindrical trunk + layered 360-deg foliage tree...");
+            appendCylindricalTrunk(frontA, worldScale);
+            // Primary full tree (0 deg) — canopy + upper branches (trunk already built as true cylinder!)
+            appendShell(frontA, nullptr, worldScale, 0.0f, 1.0f, 1.0f, 0, 0, true, false);
+
+            if (useSecond && !secondMatchesFront && secondA.isBotanicalTree) {
+                // 2 distinct tree photos: cross-rotate Photo 2 canopy cleanly at +62 deg & -62 deg (no edge-on 90-deg stripe on Front view!)
+                float fHeightPx = static_cast<float>(std::max(1, frontA.maxY - frontA.minY));
+                float sHeightPx = static_cast<float>(std::max(1, secondA.maxY - secondA.minY));
+                float secWorldScale = 2.4f / static_cast<float>(std::max(secondA.width, secondA.height));
+                float matchRatio = (fHeightPx * worldScale) / (sHeightPx * secWorldScale);
+                appendShell(secondA, nullptr, secWorldScale, 1.082104f, 0.90f * matchRatio, 0.96f * matchRatio, 1, 1, true, false);
+                appendShell(frontA, nullptr, worldScale, -1.047198f, 0.88f, 0.95f, 0, 0, true, false);
+            } else {
+                // Single-view botanical tree: cross-angled crisp canopy rings (+55 deg, -55 deg) without duplicating trunk
+                appendShell(frontA, nullptr, worldScale, 0.959931f, 0.90f, 0.96f, 0, 0, true, false);
+                appendShell(frontA, nullptr, worldScale, -0.959931f, 0.88f, 0.94f, 0, 0, true, false);
+            }
+        } else {
+            logProgress(74, "Building AI-depth sculpted 3D object mesh...");
+            appendShell(frontA, useSecond ? &secondA : nullptr, worldScale, 0.0f, 1.0f, 1.0f, 0,
+                (useSecond && secondMatchesFront) ? 1 : 0, false, (useSecond && !secondMatchesFront));
+        }
+    }
+
+    if (tris.empty()) {
+        std::cerr << "[ERROR] Deep-Scan generated 0 triangles.\n";
+        return false;
+    }
+
+    std::vector<Vec3> norms(verts.size(), {0.0f, 0.0f, 0.0f});
+    for (const auto& t : tris) {
+        const Vec3& a = verts[t.a];
+        const Vec3& b = verts[t.b];
+        const Vec3& c = verts[t.c];
+        float ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+        float vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+        float nx = uy * vz - uz * vy;
+        float ny = uz * vx - ux * vz;
+        float nz = ux * vy - uy * vx;
+        norms[t.a].x += nx; norms[t.a].y += ny; norms[t.a].z += nz;
+        norms[t.b].x += nx; norms[t.b].y += ny; norms[t.b].z += nz;
+        norms[t.c].x += nx; norms[t.c].y += ny; norms[t.c].z += nz;
+    }
+    for (auto& nm : norms) {
+        float len = std::sqrt(nm.x * nm.x + nm.y * nm.y + nm.z * nm.z);
+        if (len > 1e-8f) { nm.x /= len; nm.y /= len; nm.z /= len; }
+        else nm.z = 1.0f;
+    }
+
+    logProgress(90, "Writing textured 3D OBJ/MTL (" + std::to_string(verts.size()) +
+        " vertices, " + std::to_string(tris.size()) + " triangles)...");
+
+    fs::path mtlPath = outDir / "model.mtl";
+    {
+        std::ofstream mtl(mtlPath, std::ios::trunc);
+        mtl << "# RathoreScan 3D Deep-Scan Material\n";
+        mtl << "newmtl material_front\n";
+        mtl << "Ka 0.200000 0.200000 0.200000\n";
+        mtl << "Kd 1.000000 1.000000 1.000000\n";
+        mtl << "Ks 0.080000 0.080000 0.080000\n";
+        mtl << "Ns 20.000000\n";
+        mtl << "d 1.000000\n";
+        mtl << "illum 2\n";
+        mtl << "map_Kd texture_front.png\n";
+        if (useSecond) {
+            mtl << "\nnewmtl material_back\n";
+            mtl << "Ka 0.200000 0.200000 0.200000\n";
+            mtl << "Kd 1.000000 1.000000 1.000000\n";
+            mtl << "Ks 0.080000 0.080000 0.080000\n";
+            mtl << "Ns 20.000000\n";
+            mtl << "d 1.000000\n";
+            mtl << "illum 2\n";
+            mtl << "map_Kd texture_back.png\n";
+        }
+    }
+
+    fs::path objPath = outDir / "model.obj";
+    {
+        std::ofstream obj(objPath, std::ios::trunc);
+        obj << "# RathoreScan 3D Deep-Scan Engine\n";
+        obj << "mtllib model.mtl\n";
+        obj << std::fixed << std::setprecision(6);
+        for (const auto& v : verts) obj << "v " << v.x << " " << v.y << " " << v.z << "\n";
+        for (const auto& vt : uvs) obj << "vt " << vt.u << " " << vt.v << "\n";
+        for (const auto& vn : norms) obj << "vn " << vn.x << " " << vn.y << " " << vn.z << "\n";
+
+        int currentMat = -1;
+        for (const auto& t : tris) {
+            if (t.mat != currentMat) {
+                currentMat = t.mat;
+                obj << "usemtl " << (currentMat == 1 ? "material_back" : "material_front") << "\n";
+            }
+            int a = t.a + 1, b = t.b + 1, c = t.c + 1;
+            obj << "f " << a << "/" << a << "/" << a << " "
+                << b << "/" << b << "/" << b << " "
+                << c << "/" << c << "/" << c << "\n";
+        }
+    }
+
+    std::error_code ec;
+    fs::remove_all(tmpDir, ec);
+    logProgress(100, "Deep-Scan 3D Model Ready! Loading in Studio...");
+    return true;
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 5) {
-        std::cerr << "Usage: scan3d_engine <job_dir> <mode:video|photos|hybrid> <video_path|none> <preset:lowpoly|balanced|highpoly|ultra> [fps] [scene_mode:auto|subject|full]\n";
+        std::cerr << "Usage: scan3d_engine <job_dir> <mode:video|photos|hybrid> <video_path|none> <preset:lowpoly|balanced|highpoly|ultra> [fps] [scene_mode:auto|subject|tree|full]\n";
         return 1;
     }
 
@@ -97,22 +1288,12 @@ int main(int argc, char* argv[]) {
     std::string fpsRaw = (argc >= 6) ? argv[5] : "3";
     std::string sceneMode = (argc >= 7) ? argv[6] : "auto";
 
-    if (mode != "video" && mode != "photos" && mode != "hybrid") {
-        mode = "video";
-    }
-    if (preset != "lowpoly" && preset != "balanced" && preset != "highpoly" && preset != "ultra") {
-        preset = "balanced";
-    }
-    if (sceneMode != "auto" && sceneMode != "subject" && sceneMode != "full") {
-        sceneMode = "auto";
-    }
+    if (mode != "video" && mode != "photos" && mode != "hybrid") mode = "video";
+    if (preset != "lowpoly" && preset != "balanced" && preset != "highpoly" && preset != "ultra") preset = "balanced";
+    if (sceneMode != "auto" && sceneMode != "subject" && sceneMode != "tree" && sceneMode != "full") sceneMode = "auto";
 
     int fpsVal = 2;
-    try {
-        fpsVal = std::stoi(fpsRaw);
-    } catch (...) {
-        fpsVal = 2;
-    }
+    try { fpsVal = std::stoi(fpsRaw); } catch (...) { fpsVal = 2; }
     if (fpsVal < 1 || fpsVal > 10) fpsVal = 2;
     std::string fps = std::to_string(fpsVal);
 
@@ -124,47 +1305,15 @@ int main(int argc, char* argv[]) {
         std::cerr << "[ERROR] FFmpeg not found at: " << cfg.ffmpeg << " (Update tools_config.txt)\n";
         return 2;
     }
-    if (cfg.colmap != "colmap" && !fs::exists(cfg.colmap)) {
-        std::cerr << "[ERROR] COLMAP not found at: " << cfg.colmap << " (Update tools_config.txt)\n";
-        return 3;
-    }
-    if (!cfg.openmvsDir.empty() && !fs::exists(cfg.openmvsDir)) {
-        std::cerr << "[ERROR] OpenMVS folder not found at: " << cfg.openmvsDir << " (Update tools_config.txt)\n";
-        return 8;
-    }
 
-    // Poly-Budget & Quality Presets (Optimized for speed, small size, and VRAM safety)
-    int maxImgSize = 1440;
-    int mvsResLevel = 2;
-    int texResLevel = 1;
+    int maxImgSize = 1440, mvsResLevel = 2, texResLevel = 1;
     std::string decimateFactor = "0.45";
     bool runRefine = false;
 
-    if (preset == "lowpoly") {
-        maxImgSize = 1024;
-        mvsResLevel = 3;
-        texResLevel = 2;
-        decimateFactor = "0.18";
-        runRefine = false;
-    } else if (preset == "balanced") {
-        maxImgSize = 1440;
-        mvsResLevel = 2;
-        texResLevel = 1;
-        decimateFactor = "0.45";
-        runRefine = false;
-    } else if (preset == "highpoly") {
-        maxImgSize = 1920;
-        mvsResLevel = 1;
-        texResLevel = 1;
-        decimateFactor = "0.80";
-        runRefine = true;
-    } else if (preset == "ultra") {
-        maxImgSize = 2400;
-        mvsResLevel = 1;
-        texResLevel = 0;
-        decimateFactor = "1.0";
-        runRefine = true;
-    }
+    if (preset == "lowpoly") { maxImgSize = 1024; mvsResLevel = 3; texResLevel = 2; decimateFactor = "0.18"; }
+    else if (preset == "balanced") { maxImgSize = 1440; mvsResLevel = 2; texResLevel = 1; decimateFactor = "0.45"; }
+    else if (preset == "highpoly") { maxImgSize = 1920; mvsResLevel = 1; texResLevel = 1; decimateFactor = "0.80"; runRefine = true; }
+    else if (preset == "ultra") { maxImgSize = 2400; mvsResLevel = 1; texResLevel = 0; decimateFactor = "1.0"; runRefine = true; }
 
     fs::path rawPhotoDir = jobDir / "raw_photos";
     fs::path imgDir = jobDir / "images";
@@ -180,7 +1329,6 @@ int main(int argc, char* argv[]) {
     fs::create_directories(denseDir);
     fs::create_directories(outDir);
 
-    // 1A. Extract frames from video (with duplicate-frame drop to save time & size)
     if (mode == "video" || mode == "hybrid") {
         fs::path videoPath = fs::absolute(videoArg);
         if (!fs::exists(videoPath)) {
@@ -198,31 +1346,25 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 1B. Normalize uploaded multi-angle photos (100+ photos supported cleanly)
     if ((mode == "photos" || mode == "hybrid") && fs::exists(rawPhotoDir)) {
         std::vector<fs::path> photos;
         for (const auto& entry : fs::directory_iterator(rawPhotoDir)) {
-            if (entry.is_regular_file() && isImageExt(entry.path().extension().string())) {
-                photos.push_back(entry.path());
-            }
+            if (entry.is_regular_file() && isImageExt(entry.path().extension().string())) photos.push_back(entry.path());
         }
         std::sort(photos.begin(), photos.end());
         if (photos.empty() && mode == "photos") {
             std::cerr << "[ERROR] No valid photos found in job.\n";
             return 2;
         }
-        logProgress(14, "Optimizing " + std::to_string(photos.size()) + " uploaded photos to " + std::to_string(maxImgSize) + "px...");
+        logProgress(12, "Optimizing " + std::to_string(photos.size()) + " uploaded photo(s) to " + std::to_string(maxImgSize) + "px...");
         int idx = 1;
         for (const auto& p : photos) {
             std::ostringstream oss;
             oss << "photo_" << std::setw(4) << std::setfill('0') << idx++ << ".jpg";
             fs::path dst = imgDir / oss.str();
             std::string imgCmd = "\"" + cfg.ffmpeg + "\" -y -i \"" + p.string() +
-                "\" -vf \"scale='min(" + std::to_string(maxImgSize) + ",iw)':-2\" -qscale:v 2 \"" +
-                dst.string() + "\"";
-            if (runCmd(imgCmd) != 0) {
-                std::cerr << "[WARN] Skipping unreadable photo: " << p.filename().string() << "\n";
-            }
+                "\" -vf \"scale='min(" + std::to_string(maxImgSize) + ",iw)':-2\" -qscale:v 2 \"" + dst.string() + "\"";
+            if (runCmd(imgCmd) != 0) std::cerr << "[WARN] Skipping unreadable photo: " << p.filename().string() << "\n";
         }
     }
 
@@ -230,12 +1372,33 @@ int main(int argc, char* argv[]) {
     for (const auto& entry : fs::directory_iterator(imgDir)) {
         if (entry.is_regular_file()) totalImages++;
     }
-    if (totalImages < 3) {
-        std::cerr << "[ERROR] Need at least 3 sharp images/frames for 3D reconstruction (found " << totalImages << ").\n";
+    if (totalImages < 1) {
+        std::cerr << "[ERROR] Need at least 1 photo or video frame for 3D reconstruction.\n";
         return 2;
     }
 
-    // Helper: run COLMAP SfM pass (with optional Subject-Focus foreground mask)
+    logProgress(16, "Inspecting " + std::to_string(totalImages) + " view(s) for unique angles & surface detail...");
+    std::vector<fs::path> uniqueViews = deduplicateViews(cfg, imgDir, jobDir / "dedup_tmp");
+    std::error_code dedupEc;
+    fs::remove_all(jobDir / "dedup_tmp", dedupEc);
+
+    int uniqueCount = static_cast<int>(uniqueViews.size());
+    logProgress(18, "Detected " + std::to_string(uniqueCount) + " unique camera view(s).");
+
+    if (uniqueCount == 1) {
+        logProgress(22, "Single-View AI + Volumetric Deep-Scan Mode active...");
+        if (!reconstructDeepScan(cfg, jobDir, uniqueViews[0], fs::path(), preset, sceneMode)) return 12;
+        return 0;
+    }
+
+    bool hasPhotogrammetry = (cfg.colmap == "colmap" || fs::exists(cfg.colmap)) &&
+                             (cfg.openmvsDir.empty() || fs::exists(cfg.openmvsDir));
+    if (!hasPhotogrammetry) {
+        logProgress(22, "COLMAP/OpenMVS not configured — running AI Deep-Scan 3D reconstruction...");
+        fs::path backView = (uniqueCount >= 2) ? uniqueViews[1] : fs::path();
+        return reconstructDeepScan(cfg, jobDir, uniqueViews[0], backView, preset, sceneMode) ? 0 : 12;
+    }
+
     std::string colmapCall = "\"" + cfg.colmap + "\"";
 #ifdef _WIN32
     if (cfg.colmap.size() >= 4 && cfg.colmap.substr(cfg.colmap.size() - 4) == ".bat") {
@@ -275,91 +1438,69 @@ int main(int argc, char* argv[]) {
         std::string maskFlag = "";
         if (useMask) {
             logProgress(20, "Generating Subject-Focus Mask (ignoring blurred background)...");
-            if (prepareSubjectMasks()) {
-                maskFlag = " --ImageReader.mask_path \"" + masksDir.string() + "\"";
-            }
+            if (prepareSubjectMasks()) maskFlag = " --ImageReader.mask_path \"" + masksDir.string() + "\"";
         }
 
         logProgress(25, std::string("Running COLMAP GPU SIFT on ") + std::to_string(totalImages) +
             (useMask ? " masked views..." : " views..."));
         std::string featCmd = colmapCall + " feature_extractor"
             " --database_path \"" + dbPath.string() + "\""
-            " --image_path \"" + imgDir.string() + "\"" +
-            maskFlag +
+            " --image_path \"" + imgDir.string() + "\"" + maskFlag +
             " --ImageReader.single_camera " + singleCam +
             " --FeatureExtraction.use_gpu 1"
             " --FeatureExtraction.max_image_size " + std::to_string(maxImgSize) +
             " --SiftExtraction.max_num_features " + maxFeats +
             " --SiftExtraction.domain_size_pooling 1";
-        if (preset == "highpoly" || preset == "ultra") {
-            featCmd += " --SiftExtraction.estimate_affine_shape 1";
-        }
+        if (preset == "highpoly" || preset == "ultra") featCmd += " --SiftExtraction.estimate_affine_shape 1";
         if (runCmd(featCmd) != 0) return -1;
 
         std::string matchCmd;
         if (totalImages <= 45) {
             logProgress(40, "Running Guided Exhaustive Matching (" + std::to_string(totalImages) + " views)...");
-            matchCmd = colmapCall + " exhaustive_matcher"
-                " --database_path \"" + dbPath.string() + "\""
-                " --FeatureMatching.use_gpu 1"
-                " --FeatureMatching.guided_matching 1";
+            matchCmd = colmapCall + " exhaustive_matcher --database_path \"" + dbPath.string() + "\" --FeatureMatching.use_gpu 1 --FeatureMatching.guided_matching 1";
         } else if (mode == "video") {
             logProgress(40, "Matching sequential video frames with Guided Matching on GPU...");
-            matchCmd = colmapCall + " sequential_matcher"
-                " --database_path \"" + dbPath.string() + "\""
-                " --FeatureMatching.use_gpu 1"
-                " --FeatureMatching.guided_matching 1"
-                " --SequentialMatching.overlap 18"
-                " --SequentialMatching.quadratic_overlap 1";
+            matchCmd = colmapCall + " sequential_matcher --database_path \"" + dbPath.string() + "\" --FeatureMatching.use_gpu 1 --FeatureMatching.guided_matching 1 --SequentialMatching.overlap 18 --SequentialMatching.quadratic_overlap 1";
         } else if (totalImages <= 120) {
             logProgress(40, "Running Guided Exhaustive Matching for high accuracy...");
-            matchCmd = colmapCall + " exhaustive_matcher"
-                " --database_path \"" + dbPath.string() + "\""
-                " --FeatureMatching.use_gpu 1"
-                " --FeatureMatching.guided_matching 1";
+            matchCmd = colmapCall + " exhaustive_matcher --database_path \"" + dbPath.string() + "\" --FeatureMatching.use_gpu 1 --FeatureMatching.guided_matching 1";
         } else {
             logProgress(40, "Matching large 100+ photo set with quadratic overlap on GPU...");
-            matchCmd = colmapCall + " sequential_matcher"
-                " --database_path \"" + dbPath.string() + "\""
-                " --FeatureMatching.use_gpu 1"
-                " --FeatureMatching.guided_matching 1"
-                " --SequentialMatching.overlap 22"
-                " --SequentialMatching.quadratic_overlap 1";
+            matchCmd = colmapCall + " sequential_matcher --database_path \"" + dbPath.string() + "\" --FeatureMatching.use_gpu 1 --FeatureMatching.guided_matching 1 --SequentialMatching.overlap 22 --SequentialMatching.quadratic_overlap 1";
         }
         if (runCmd(matchCmd) != 0) return -1;
 
         logProgress(52, "Computing 3D Camera Poses & Sparse Point Cloud...");
-        std::string mapCmd = colmapCall + " mapper"
-            " --database_path \"" + dbPath.string() + "\""
-            " --image_path \"" + imgDir.string() + "\""
-            " --output_path \"" + sparseDir.string() + "\""
-            " --Mapper.min_num_matches 10"
-            " --Mapper.init_min_num_inliers 40";
+        std::string mapCmd = colmapCall + " mapper --database_path \"" + dbPath.string() + "\" --image_path \"" + imgDir.string() + "\" --output_path \"" + sparseDir.string() + "\" --Mapper.min_num_matches 10 --Mapper.init_min_num_inliers 40";
         if (runCmd(mapCmd) != 0) return -1;
 
         fs::path bestSparse;
         uintmax_t bestScore = 0;
         for (const auto& entry : fs::directory_iterator(sparseDir)) {
             if (!entry.is_directory()) continue;
-            fs::path imgBin = entry.path() / "images.bin";
-            fs::path ptsBin = entry.path() / "points3D.bin";
+            fs::path imgBin = entry.path() / "images.bin", ptsBin = entry.path() / "points3D.bin";
             if (fs::exists(imgBin) && fs::exists(ptsBin)) {
                 uintmax_t score = fs::file_size(imgBin) + fs::file_size(ptsBin);
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestSparse = entry.path();
-                }
+                if (score > bestScore) { bestScore = score; bestSparse = entry.path(); }
             }
         }
         if (bestSparse.empty()) return 0;
 
-        logProgress(62, "Undistorting camera frames from best sparse model (" + bestSparse.filename().string() + ")...");
-        std::string undistCmd = colmapCall + " image_undistorter"
+        // Auto-level 3D scene using Manhattan-World alignment (keeps horizon & walls straight)
+        fs::path alignedSparse = sparseDir / "aligned";
+        fs::create_directories(alignedSparse);
+        std::string alignCmd = colmapCall + " model_orientation_aligner"
             " --image_path \"" + imgDir.string() + "\""
             " --input_path \"" + bestSparse.string() + "\""
-            " --output_path \"" + denseDir.string() + "\""
-            " --output_type COLMAP"
-            " --max_image_size " + std::to_string(maxImgSize);
+            " --output_path \"" + alignedSparse.string() + "\""
+            " --method MANHATTAN-WORLD"
+            " --max_image_size " + std::to_string(std::min(maxImgSize, 1024));
+        if (runCmd(alignCmd) == 0 && fs::exists(alignedSparse / "images.bin")) {
+            bestSparse = alignedSparse;
+        }
+
+        logProgress(62, "Undistorting camera frames from aligned model (" + bestSparse.filename().string() + ")...");
+        std::string undistCmd = colmapCall + " image_undistorter --image_path \"" + imgDir.string() + "\" --input_path \"" + bestSparse.string() + "\" --output_path \"" + denseDir.string() + "\" --output_type COLMAP --max_image_size " + std::to_string(maxImgSize);
         if (runCmd(undistCmd) != 0) return -1;
 
         int regCount = 0;
@@ -372,69 +1513,51 @@ int main(int argc, char* argv[]) {
     };
 
     int regViews = 0;
-    if (sceneMode == "subject") {
-        regViews = runSfmPass(true);
-    } else if (sceneMode == "full") {
+    if (uniqueCount == 2) {
         regViews = runSfmPass(false);
+        if (regViews < 2) {
+            logProgress(25, "2 wide-angle/distinct photos detected — activating Dual-View AI Deep-Scan 3D Reconstruction...");
+            if (!reconstructDeepScan(cfg, jobDir, uniqueViews[0], uniqueViews[1], preset, sceneMode)) return 12;
+            return 0;
+        }
     } else {
-        regViews = runSfmPass(false);
-        if (regViews < std::min(5, totalImages)) {
-            logProgress(22, "Only " + std::to_string(std::max(0, regViews)) + " full-frame views matched — retrying with Subject-Focus Background Mask...");
-            int maskedViews = runSfmPass(true);
-            if (maskedViews > regViews) {
-                regViews = maskedViews;
-            } else if (regViews > 0) {
-                // Restore unmasked pass if it actually had more views
-                regViews = runSfmPass(false);
+        if (sceneMode == "subject" || sceneMode == "tree") regViews = runSfmPass(true);
+        else if (sceneMode == "full") regViews = runSfmPass(false);
+        else {
+            regViews = runSfmPass(false);
+            if (regViews < std::min(5, totalImages)) {
+                logProgress(22, "Only " + std::to_string(std::max(0, regViews)) + " full-frame views matched — retrying with Subject-Focus Background Mask...");
+                int maskedViews = runSfmPass(true);
+                if (maskedViews > regViews) regViews = maskedViews;
+                else if (regViews > 0) regViews = runSfmPass(false);
             }
         }
     }
 
     if (regViews < 2) {
-        std::cerr << "[ERROR] COLMAP could not align enough 3D views (registered=" << regViews << "). Move slowly 360 degrees around a textured object or upload 15+ overlapping photos.\n";
-        return 5;
+        logProgress(25, "Insufficient SfM parallax (registered=" + std::to_string(regViews) + ") — activating AI Deep-Scan 3D Reconstruction fallback...");
+        fs::path backView = (uniqueCount >= 2) ? uniqueViews.back() : fs::path();
+        if (!reconstructDeepScan(cfg, jobDir, uniqueViews[0], backView, preset, sceneMode)) return 5;
+        return 0;
     }
     logProgress(66, "Aligned " + std::to_string(regViews) + " / " + std::to_string(totalImages) + " camera views in 3D!");
 
-    // 6. Export Sparse TXT inside dense/sparse for OpenMVS InterfaceCOLMAP
     logProgress(68, "Converting camera model to OpenMVS TXT format...");
-    std::string convCmd = colmapCall + " model_converter"
-        " --input_path \"" + (denseDir / "sparse").string() + "\""
-        " --output_path \"" + (denseDir / "sparse").string() + "\""
-        " --output_type TXT";
-    if (runCmd(convCmd) != 0) {
-        std::cerr << "[ERROR] COLMAP model_converter failed.\n";
-        return 7;
-    }
+    std::string convCmd = colmapCall + " model_converter --input_path \"" + (denseDir / "sparse").string() + "\" --output_path \"" + (denseDir / "sparse").string() + "\" --output_type TXT";
+    if (runCmd(convCmd) != 0) { std::cerr << "[ERROR] COLMAP model_converter failed.\n"; return 7; }
 
-    // 7. OpenMVS InterfaceCOLMAP
     logProgress(74, "Initializing OpenMVS scene...");
-    std::string mvsInit = mvsExe(cfg, "InterfaceCOLMAP") +
-        " -i dense -o scene.mvs --image-folder images";
-    if (runCmd(mvsInit, jobDir.string()) != 0) {
-        std::cerr << "[ERROR] OpenMVS InterfaceCOLMAP failed.\n";
-        return 8;
-    }
+    std::string mvsInit = mvsExe(cfg, "InterfaceCOLMAP") + " -i dense -o scene.mvs --image-folder images";
+    if (runCmd(mvsInit, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS InterfaceCOLMAP failed.\n"; return 8; }
 
-    // 8. OpenMVS DensifyPointCloud
     logProgress(82, "Generating Dense 3D Point Cloud...");
-    std::string densifyCmd = mvsExe(cfg, "DensifyPointCloud") +
-        " scene.mvs --resolution-level " + std::to_string(mvsResLevel) +
-        " --max-resolution " + std::to_string(maxImgSize) +
-        " --number-views 5";
-    if (runCmd(densifyCmd, jobDir.string()) != 0) {
-        std::cerr << "[ERROR] OpenMVS DensifyPointCloud failed.\n";
-        return 9;
-    }
+    std::string densifyCmd = mvsExe(cfg, "DensifyPointCloud") + " scene.mvs --resolution-level " + std::to_string(mvsResLevel) + " --max-resolution " + std::to_string(maxImgSize) + " --number-views " + std::to_string(std::min(5, regViews));
+    if (runCmd(densifyCmd, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS DensifyPointCloud failed.\n"; return 9; }
 
-    // 9. OpenMVS ReconstructMesh (with preset poly decimation + safe fallback)
-    logProgress(90, "Building 3D Polygon Mesh (Preset: " + preset + ")...");
-    std::string meshCmd = mvsExe(cfg, "ReconstructMesh") +
-        " scene_dense.mvs -o scene_mesh.mvs --decimate " + decimateFactor;
-    if (runCmd(meshCmd, jobDir.string()) != 0) {
-        std::cerr << "[ERROR] OpenMVS ReconstructMesh failed.\n";
-        return 10;
-    }
+    logProgress(90, "Building Clean 3D Polygon Mesh (Preset: " + preset + ")...");
+    std::string meshCmd = mvsExe(cfg, "ReconstructMesh") + " scene_dense.mvs -o scene_mesh.mvs --decimate " + decimateFactor +
+        " --remove-spurious 35 --remove-spikes 1 --close-holes 60 --smooth 3";
+    if (runCmd(meshCmd, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS ReconstructMesh failed.\n"; return 10; }
 
     fs::path meshPly = jobDir / "scene_mesh.ply";
     auto hasValidMesh = [](const fs::path& p) {
@@ -450,58 +1573,74 @@ int main(int argc, char* argv[]) {
 
     if (!hasValidMesh(meshPly) && decimateFactor != "1.0") {
         logProgress(92, "Retrying Mesh Reconstruction without decimation...");
-        std::string retryMeshCmd = mvsExe(cfg, "ReconstructMesh") +
-            " scene_dense.mvs -o scene_mesh.mvs --decimate 1";
-        runCmd(retryMeshCmd, jobDir.string());
+        runCmd(mvsExe(cfg, "ReconstructMesh") + " scene_dense.mvs -o scene_mesh.mvs --decimate 1", jobDir.string());
     }
 
     if (!hasValidMesh(meshPly)) {
-        std::cerr << "[ERROR] Reconstructed 3D mesh has 0 faces (insufficient 3D parallax/overlap in video/photos). Move slowly 360 degrees around a textured object or upload 15+ overlapping photos.\n";
-        return 10;
+        logProgress(35, "OpenMVS produced 0 faces — falling back to AI Deep-Scan 3D Reconstruction...");
+        fs::path backView = (uniqueCount >= 2) ? uniqueViews.back() : fs::path();
+        if (!reconstructDeepScan(cfg, jobDir, uniqueViews[0], backView, preset, sceneMode)) return 10;
+        return 0;
     }
 
     std::string meshInputForTex = "scene_mesh.ply";
-
-    // 10. Optional RefineMesh (High-Poly / Ultra Presets)
     if (runRefine) {
         logProgress(94, "Refining High-Frequency Surface Details...");
-        std::string refineCmd = mvsExe(cfg, "RefineMesh") +
-            " scene_dense.mvs -m scene_mesh.ply -o scene_refined.mvs --resolution-level 2 --max-face-area 64";
-        if (runCmd(refineCmd, jobDir.string()) == 0) {
+        if (runCmd(mvsExe(cfg, "RefineMesh") + " scene_dense.mvs -m scene_mesh.ply -o scene_refined.mvs --resolution-level 2 --max-face-area 64", jobDir.string()) == 0) {
             meshInputForTex = "scene_refined.ply";
         }
     }
 
-    // 11. OpenMVS TextureMesh -> Clean UV Map & Texture (disable seam-leveling overflow blobs)
     logProgress(97, "Baking Clean UV Map & Texture...");
     fs::path finalObj = outDir / "model.obj";
-    std::string texCmd = mvsExe(cfg, "TextureMesh") +
-        " scene_dense.mvs -m " + meshInputForTex +
-        " -o \"" + finalObj.string() + "\""
-        " --export-type obj --resolution-level " + std::to_string(texResLevel) +
-        " --outlier-threshold 0 --global-seam-leveling 0 --local-seam-leveling 0"
-        " --empty-color 8421504 --cost-smoothness-ratio 0.4";
-    if (runCmd(texCmd, jobDir.string()) != 0) {
-        std::cerr << "[ERROR] OpenMVS TextureMesh failed.\n";
-        return 11;
-    }
+    std::string texCmd = mvsExe(cfg, "TextureMesh") + " scene_dense.mvs -m " + meshInputForTex +
+        " -o \"" + finalObj.string() + "\" --export-type obj --resolution-level " + std::to_string(texResLevel) +
+        " --outlier-threshold 0 --global-seam-leveling 0 --local-seam-leveling 0 --empty-color 8421504 --cost-smoothness-ratio 0.4";
+    if (runCmd(texCmd, jobDir.string()) != 0) { std::cerr << "[ERROR] OpenMVS TextureMesh failed.\n"; return 11; }
 
-    // Fix OpenMVS MTL quirk: replace "Tr 1.000000" (treated as 100% transparent by Three.js/glTF) with "d 1.000000"
     fs::path finalMtl = outDir / "model.mtl";
     if (fs::exists(finalMtl)) {
         std::ifstream mtlIn(finalMtl);
         std::ostringstream mtlBuf;
         std::string line;
         while (std::getline(mtlIn, line)) {
-            if (line.rfind("Tr ", 0) == 0) {
-                mtlBuf << "d 1.000000\n";
-            } else {
-                mtlBuf << line << "\n";
-            }
+            if (line.rfind("Tr ", 0) == 0) mtlBuf << "d 1.000000\n";
+            else mtlBuf << line << "\n";
         }
         mtlIn.close();
         std::ofstream mtlOut(finalMtl, std::ios::trunc);
         mtlOut << mtlBuf.str();
+    }
+
+    // Convert COLMAP/OpenMVS +Y-down coordinates to +Y-up (rotate 180 deg around X) so Three.js, Unity, & UE5 load upright
+    if (fs::exists(finalObj)) {
+        fs::path tmpObj = outDir / "model_yup.obj";
+        std::ifstream objIn(finalObj);
+        std::ofstream objOut(tmpObj, std::ios::trunc);
+        std::string line;
+        while (std::getline(objIn, line)) {
+            if (line.rfind("v ", 0) == 0 || line.rfind("vn ", 0) == 0) {
+                std::istringstream iss(line);
+                std::string tag;
+                double x = 0, y = 0, z = 0;
+                if (iss >> tag >> x >> y >> z) {
+                    objOut << tag << " " << x << " " << -y << " " << -z;
+                    std::string rest;
+                    if (std::getline(iss, rest)) objOut << rest;
+                    objOut << "\n";
+                    continue;
+                }
+            }
+            objOut << line << "\n";
+        }
+        objIn.close();
+        objOut.close();
+        std::error_code ec;
+        fs::rename(tmpObj, finalObj, ec);
+        if (ec) {
+            fs::copy_file(tmpObj, finalObj, fs::copy_options::overwrite_existing, ec);
+            fs::remove(tmpObj, ec);
+        }
     }
 
     logProgress(100, "3D Model Ready! Loading in Studio...");

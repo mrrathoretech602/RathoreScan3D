@@ -820,7 +820,7 @@
         <div class="card">
           <h3>Upload Video / Photo (PC &amp; Mobile)</h3>
           <p style="font-size:0.81rem; color:var(--muted); line-height:1.45;">
-            Yaha se direct <b>Video ya Photos (100+ tak)</b> upload karke use karo — file select karo ya drag &amp; drop karo:
+            Yaha se <b>1–2 Photos (Deep-Scan 3D)</b> ya <b>15–100+ Photos / 360° Video (Full Photogrammetry)</b> upload karke use karo:
           </p>
           <input type="file" id="mediaInput" accept="video/*,image/*" multiple style="display:none" />
           <input type="file" id="fileInput" accept="video/*" capture="environment" style="display:none" />
@@ -873,8 +873,9 @@
           <div>
             <label for="sceneModeSel">Scene Focus (Background Handling)</label>
             <select id="sceneModeSel">
-              <option value="auto" selected>Smart Auto (Tries Full Scene, Auto-Masks BG if Needed)</option>
-              <option value="subject">Object / Person Focus (Mask Out Blurred/Static BG)</option>
+              <option value="auto" selected>Smart Auto (Auto-Detects Tree / Object / Full Scene)</option>
+              <option value="tree">Tree / Botanical 360° (Cylindrical Trunk + 3D Canopy)</option>
+              <option value="subject">Object / Product Focus (Mask Out BG)</option>
               <option value="full">Full Room / Outdoor Environment (No Mask)</option>
             </select>
           </div>
@@ -1170,10 +1171,14 @@ function refreshSelectionSummary() {
     const pBytes = selectedPhotos.reduce((a, f) => a + f.size, 0);
     totalBytes += pBytes;
     const rating = selectedPhotos.length >= 80
-      ? 'Ultra Accuracy Ready'
-      : selectedPhotos.length >= 25
-        ? 'Good 360° Coverage'
-        : 'Add more angles (25–100+ recommended, or 1+ photo preview)';
+      ? 'Ultra 360° Photogrammetry Ready'
+      : selectedPhotos.length >= 15
+        ? 'Multi-Angle Photogrammetry Ready'
+        : selectedPhotos.length === 2
+          ? '2 Photos — Dual-View Deep-Scan 3D Ready'
+          : selectedPhotos.length === 1
+            ? '1 Photo — Single-View Deep-Scan 3D Ready'
+            : `${selectedPhotos.length} Photos — Deep-Scan / SfM Ready`;
     parts.push(`Photos: ${selectedPhotos.length} (${(pBytes / 1048576).toFixed(1)} MB) — ${rating}`);
   }
   if (parts.length === 0) {
@@ -1184,7 +1189,7 @@ function refreshSelectionSummary() {
   }
   selectedInfo.innerHTML = parts.join('<br/>') + `<br/><span style="color:var(--accent)">Total Upload: ${(totalBytes / 1048576).toFixed(1)} MB</span>`;
   selectedInfo.style.color = 'var(--ok)';
-  btnBuild3D.disabled = !selectedBlob && selectedPhotos.length < 3;
+  btnBuild3D.disabled = !selectedBlob && selectedPhotos.length < 1;
 }
 
 btnStartCam.onclick = async () => {
@@ -1330,7 +1335,7 @@ btnCancelBuild.onclick = async () => {
 };
 
 btnBuild3D.onclick = () => {
-  if (!selectedBlob && selectedPhotos.length < 3) return;
+  if (!selectedBlob && selectedPhotos.length < 1) return;
   const fd = new FormData();
   if (selectedBlob) fd.append('video', selectedBlob);
   selectedPhotos.forEach(p => fd.append('photos', p));
@@ -1529,6 +1534,8 @@ function sanitizeLoadedMaterial(mat) {
     if (m.map) {
       m.map.colorSpace = THREE.SRGBColorSpace;
       m.map.needsUpdate = true;
+      m.alphaTest = 0.35;
+      m.transparent = false;
     }
     m.needsUpdate = true;
   });
