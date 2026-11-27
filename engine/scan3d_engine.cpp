@@ -8,12 +8,17 @@
 #include <string>
 #include <vector>
 #include <queue>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <cstdlib>
 #include <algorithm>
 #include <iomanip>
+#include <numeric>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -48,6 +53,12 @@ ToolConfig loadConfig(const std::string& path) {
 
 void logProgress(int pct, const std::string& msg) {
     std::cout << "[PROGRESS:" << pct << "] " << msg << std::endl;
+    std::cout.flush();
+}
+
+void logError(const std::string& msg) {
+    std::cerr << "[ERROR] " << msg << std::endl;
+    std::cerr.flush();
     std::cout.flush();
 }
 
@@ -1483,9 +1494,543 @@ bool reconstructDeepScan(
     return true;
 }
 
+// =============================================================================
+// Statistical Outlier Removal (SOR) on dense PLY before ReconstructMesh
+// =============================================================================
+
+enum class PlyScalarType { F32, F64, I8, U8, I16, U16, I32, U32 };
+
+struct PlyPropDef {
+    PlyScalarType stype;
+    std::string name;
+    int size = 4;
+};
+
+static bool parsePlyScalarType(const std::string& t, PlyScalarType& out, int& sz) {
+    if (t == "float" || t == "float32") { out = PlyScalarType::F32; sz = 4; return true; }
+    if (t == "double" || t == "float64") { out = PlyScalarType::F64; sz = 8; return true; }
+    if (t == "char" || t == "int8") { out = PlyScalarType::I8; sz = 1; return true; }
+    if (t == "uchar" || t == "uint8") { out = PlyScalarType::U8; sz = 1; return true; }
+    if (t == "short" || t == "int16") { out = PlyScalarType::I16; sz = 2; return true; }
+    if (t == "ushort" || t == "uint16") { out = PlyScalarType::U16; sz = 2; return true; }
+    if (t == "int" || t == "int32") { out = PlyScalarType::I32; sz = 4; return true; }
+    if (t == "uint" || t == "uint32") { out = PlyScalarType::U32; sz = 4; return true; }
+    return false;
+}
+
+static double readPlyScalar(const uint8_t* p, PlyScalarType t) {
+    switch (t) {
+        case PlyScalarType::F32: { float v; std::memcpy(&v, p, 4); return static_cast<double>(v); }
+        case PlyScalarType::F64: { double v; std::memcpy(&v, p, 8); return v; }
+        case PlyScalarType::I8:  { int8_t v; std::memcpy(&v, p, 1); return static_cast<double>(v); }
+        case PlyScalarType::U8:  { uint8_t v; std::memcpy(&v, p, 1); return static_cast<double>(v); }
+        case PlyScalarType::I16: { int16_t v; std::memcpy(&v, p, 2); return static_cast<double>(v); }
+        case PlyScalarType::U16: { uint16_t v; std::memcpy(&v, p, 2); return static_cast<double>(v); }
+        case PlyScalarType::I32: { int32_t v; std::memcpy(&v, p, 4); return static_cast<double>(v); }
+        case PlyScalarType::U32: { uint32_t v; std::memcpy(&v, p, 4); return static_cast<double>(v); }
+    }
+    return 0.0;
+}
+
+struct CellCoord3 {
+    int64_t x, y, z;
+    bool operator==(const CellCoord3& o) const { return x == o.x && y == o.y && z == o.z; }
+};
+
+struct CellCoordHash {
+    size_t operator()(const CellCoord3& c) const noexcept {
+        uint64_t h = static_cast<uint64_t>(c.x) * 73856093ULL;
+        h ^= static_cast<uint64_t>(c.y) * 19349663ULL;
+        h ^= static_cast<uint64_t>(c.z) * 83492791ULL;
+        return static_cast<size_t>(h ^ (h >> 33));
+    }
+};
+
+static bool statisticalOutlierRemovalPly(
+    const fs::path& srcPath,
+    const fs::path& dstPath,
+    int k,
+    double stdRatio,
+    size_t& totalOut,
+    size_t& keptOut
+) {
+    totalOut = 0;
+    keptOut = 0;
+    std::ifstream in(srcPath, std::ios::binary);
+    if (!in.is_open()) return false;
+
+    bool isBinary = false;
+    bool isLittleEndian = true;
+    bool hasFaces = false;
+    bool hasListProp = false;
+    bool inVertexElem = false;
+    size_t vertexCount = 0;
+    struct PlyFieldDef {
+        bool isList = false;
+        PlyScalarType stype = PlyScalarType::F32;
+        int scalarSz = 4;
+        PlyScalarType countType = PlyScalarType::U8;
+        int countSz = 1;
+        int elemSz = 4;
+        std::string name;
+    };
+    std::vector<PlyFieldDef> fields;
+    int xCol = -1, yCol = -1, zCol = -1;
+    std::vector<std::string> headerLines;
+    std::string line;
+
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        headerLines.push_back(line);
+        std::istringstream iss(line);
+        std::string tok;
+        iss >> tok;
+        if (tok == "format") {
+            std::string fmt;
+            iss >> fmt;
+            if (fmt == "binary_little_endian") { isBinary = true; isLittleEndian = true; }
+            else if (fmt == "binary_big_endian") { isBinary = true; isLittleEndian = false; }
+            else if (fmt == "ascii") { isBinary = false; }
+            else return false;
+        } else if (tok == "element") {
+            std::string ename;
+            size_t cnt = 0;
+            iss >> ename >> cnt;
+            if (ename == "vertex") { vertexCount = cnt; inVertexElem = true; }
+            else {
+                inVertexElem = false;
+                if (ename == "face" && cnt > 0) hasFaces = true;
+            }
+        } else if (tok == "property" && inVertexElem) {
+            std::string ptype;
+            iss >> ptype;
+            if (ptype == "list") {
+                std::string ctypeStr, etypeStr, pname;
+                iss >> ctypeStr >> etypeStr >> pname;
+                PlyScalarType ct, et;
+                int csz = 0, esz = 0;
+                if (!parsePlyScalarType(ctypeStr, ct, csz) || !parsePlyScalarType(etypeStr, et, esz)) return false;
+                hasListProp = true;
+                PlyFieldDef fd;
+                fd.isList = true; fd.countType = ct; fd.countSz = csz; fd.elemSz = esz; fd.name = pname;
+                fields.push_back(fd);
+            } else {
+                std::string pname;
+                iss >> pname;
+                PlyScalarType st;
+                int sz = 0;
+                if (!parsePlyScalarType(ptype, st, sz)) return false;
+                int col = static_cast<int>(fields.size());
+                if (pname == "x") xCol = col;
+                else if (pname == "y") yCol = col;
+                else if (pname == "z") zCol = col;
+                PlyFieldDef fd;
+                fd.isList = false; fd.stype = st; fd.scalarSz = sz; fd.name = pname;
+                fields.push_back(fd);
+            }
+        } else if (tok == "end_header") {
+            break;
+        }
+    }
+
+    if ((isBinary && !isLittleEndian) || hasFaces || xCol < 0 || yCol < 0 || zCol < 0 || vertexCount == 0) {
+        return false;
+    }
+
+    totalOut = vertexCount;
+    if (vertexCount < static_cast<size_t>(k * 8)) {
+        keptOut = vertexCount;
+        return false;
+    }
+
+    std::vector<uint8_t> binBuf;
+    std::vector<size_t> binRecStart, binRecLen;
+    std::vector<std::string> asciiLines;
+    std::vector<double> xs(vertexCount), ys(vertexCount), zs(vertexCount);
+
+    if (isBinary) {
+        std::streampos payloadStart = in.tellg();
+        in.seekg(0, std::ios::end);
+        std::streampos fileEnd = in.tellg();
+        in.seekg(payloadStart);
+        if (payloadStart < 0 || fileEnd <= payloadStart) return false;
+        size_t payloadSize = static_cast<size_t>(fileEnd - payloadStart);
+        binBuf.resize(payloadSize);
+        in.read(reinterpret_cast<char*>(binBuf.data()), static_cast<std::streamsize>(payloadSize));
+        if (!in) return false;
+
+        binRecStart.resize(vertexCount);
+        binRecLen.resize(vertexCount);
+        size_t cursor = 0;
+        for (size_t i = 0; i < vertexCount; ++i) {
+            binRecStart[i] = cursor;
+            for (int col = 0; col < static_cast<int>(fields.size()); ++col) {
+                const auto& fd = fields[col];
+                if (!fd.isList) {
+                    if (cursor + static_cast<size_t>(fd.scalarSz) > payloadSize) return false;
+                    if (col == xCol) xs[i] = readPlyScalar(binBuf.data() + cursor, fd.stype);
+                    else if (col == yCol) ys[i] = readPlyScalar(binBuf.data() + cursor, fd.stype);
+                    else if (col == zCol) zs[i] = readPlyScalar(binBuf.data() + cursor, fd.stype);
+                    cursor += static_cast<size_t>(fd.scalarSz);
+                } else {
+                    if (cursor + static_cast<size_t>(fd.countSz) > payloadSize) return false;
+                    size_t cnt = static_cast<size_t>(std::max<int64_t>(0, std::llround(readPlyScalar(binBuf.data() + cursor, fd.countType))));
+                    cursor += static_cast<size_t>(fd.countSz);
+                    size_t bytes = cnt * static_cast<size_t>(fd.elemSz);
+                    if (cursor + bytes > payloadSize) return false;
+                    cursor += bytes;
+                }
+            }
+            binRecLen[i] = cursor - binRecStart[i];
+        }
+        (void)hasListProp;
+    } else {
+        if (hasListProp) return false;
+        asciiLines.reserve(vertexCount);
+        int maxCol = std::max({ xCol, yCol, zCol });
+        for (size_t i = 0; i < vertexCount; ++i) {
+            if (!std::getline(in, line)) return false;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            asciiLines.push_back(line);
+            std::istringstream iss(line);
+            double v = 0.0;
+            for (int c = 0; c <= maxCol && (iss >> v); ++c) {
+                if (c == xCol) xs[i] = v;
+                else if (c == yCol) ys[i] = v;
+                else if (c == zCol) zs[i] = v;
+            }
+        }
+    }
+    in.close();
+
+    double minX = 1e30, minY = 1e30, minZ = 1e30, maxX = -1e30, maxY = -1e30, maxZ = -1e30;
+    size_t validFin = 0;
+    for (size_t i = 0; i < vertexCount; ++i) {
+        if (!std::isfinite(xs[i]) || !std::isfinite(ys[i]) || !std::isfinite(zs[i])) continue;
+        minX = std::min(minX, xs[i]); maxX = std::max(maxX, xs[i]);
+        minY = std::min(minY, ys[i]); maxY = std::max(maxY, ys[i]);
+        minZ = std::min(minZ, zs[i]); maxZ = std::max(maxZ, zs[i]);
+        validFin++;
+    }
+    if (validFin < static_cast<size_t>(k * 8)) return false;
+
+    double diag = std::sqrt((maxX - minX) * (maxX - minX) + (maxY - minY) * (maxY - minY) + (maxZ - minZ) * (maxZ - minZ));
+    if (diag <= 1e-12) return false;
+    double cellSize = std::max(diag / std::cbrt(static_cast<double>(vertexCount)) * 2.5, 1e-6);
+
+    std::unordered_map<CellCoord3, std::vector<size_t>, CellCoordHash> grid;
+    grid.reserve(std::min<size_t>(vertexCount, 500000));
+    auto cellOf = [&](double x, double y, double z) -> CellCoord3 {
+        return {
+            static_cast<int64_t>(std::floor((x - minX) / cellSize)),
+            static_cast<int64_t>(std::floor((y - minY) / cellSize)),
+            static_cast<int64_t>(std::floor((z - minZ) / cellSize))
+        };
+    };
+    for (size_t i = 0; i < vertexCount; ++i) {
+        if (!std::isfinite(xs[i]) || !std::isfinite(ys[i]) || !std::isfinite(zs[i])) continue;
+        grid[cellOf(xs[i], ys[i], zs[i])].push_back(i);
+    }
+
+    std::vector<double> meanDist(vertexCount, 1e30);
+    std::vector<double> dSq;
+    dSq.reserve(64);
+    double sumMean = 0.0;
+    size_t countMean = 0;
+
+    for (size_t i = 0; i < vertexCount; ++i) {
+        if (!std::isfinite(xs[i]) || !std::isfinite(ys[i]) || !std::isfinite(zs[i])) continue;
+        CellCoord3 c = cellOf(xs[i], ys[i], zs[i]);
+        for (int radius = 1; radius <= 3; ++radius) {
+            dSq.clear();
+            for (int64_t dx = -radius; dx <= radius; ++dx) {
+                for (int64_t dy = -radius; dy <= radius; ++dy) {
+                    for (int64_t dz = -radius; dz <= radius; ++dz) {
+                        auto it = grid.find({ c.x + dx, c.y + dy, c.z + dz });
+                        if (it == grid.end()) continue;
+                        for (size_t j : it->second) {
+                            if (j == i) continue;
+                            double ddx = xs[j] - xs[i], ddy = ys[j] - ys[i], ddz = zs[j] - zs[i];
+                            dSq.push_back(ddx * ddx + ddy * ddy + ddz * ddz);
+                            if (dSq.size() >= 192) break;
+                        }
+                        if (dSq.size() >= 192) break;
+                    }
+                    if (dSq.size() >= 192) break;
+                }
+                if (dSq.size() >= 192) break;
+            }
+            if (static_cast<int>(dSq.size()) >= k) break;
+        }
+        if (dSq.empty()) continue;
+        size_t take = std::min<size_t>(dSq.size(), static_cast<size_t>(k));
+        std::nth_element(dSq.begin(), dSq.begin() + static_cast<std::ptrdiff_t>(take - 1), dSq.end());
+        double s = 0.0;
+        for (size_t t = 0; t < take; ++t) s += std::sqrt(dSq[t]);
+        meanDist[i] = s / static_cast<double>(take);
+        sumMean += meanDist[i];
+        countMean++;
+    }
+
+    if (countMean < 100) return false;
+    double mu = sumMean / static_cast<double>(countMean);
+    double var = 0.0;
+    for (size_t i = 0; i < vertexCount; ++i) {
+        if (meanDist[i] < 1e29) {
+            double diff = meanDist[i] - mu;
+            var += diff * diff;
+        }
+    }
+    double sigma = std::sqrt(var / static_cast<double>(countMean));
+    double thresh = mu + stdRatio * sigma;
+
+    std::vector<uint8_t> keep(vertexCount, 0);
+    size_t kept = 0;
+    for (size_t i = 0; i < vertexCount; ++i) {
+        if (meanDist[i] < 1e29 && (meanDist[i] <= thresh || sigma <= 1e-12)) {
+            keep[i] = 1;
+            kept++;
+        }
+    }
+
+    // Safety guard: never allow SOR to strip more than 80% or drop below 500 points
+    if (kept < 500 || kept * 5 < vertexCount) {
+        keptOut = vertexCount;
+        return false;
+    }
+    keptOut = kept;
+
+    std::ofstream out(dstPath, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) return false;
+    for (const auto& hl : headerLines) {
+        std::istringstream iss(hl);
+        std::string tok, ename;
+        if ((iss >> tok >> ename) && tok == "element" && ename == "vertex") {
+            out << "element vertex " << kept << "\n";
+        } else {
+            out << hl << "\n";
+        }
+    }
+    if (isBinary) {
+        for (size_t i = 0; i < vertexCount; ++i) {
+            if (keep[i]) out.write(reinterpret_cast<const char*>(binBuf.data() + binRecStart[i]), static_cast<std::streamsize>(binRecLen[i]));
+        }
+    } else {
+        for (size_t i = 0; i < vertexCount; ++i) {
+            if (keep[i]) out << asciiLines[i] << "\n";
+        }
+    }
+    out.close();
+    return fs::exists(dstPath) && fs::file_size(dstPath) > 256;
+}
+
+// =============================================================================
+// Connected-Component Floating Shard Removal + +Y-up Export on Textured OBJ
+// Drops tiny disconnected black triangles while preserving multiple materials & UVs
+// =============================================================================
+
+struct ObjFaceVert { int v = 0, vt = 0, vn = 0; };
+
+static ObjFaceVert parseObjFaceTok(const std::string& tok, int nV, int nVt, int nVn) {
+    ObjFaceVert fv;
+    size_t p1 = tok.find('/');
+    auto resolveIdx = [](const std::string& s, int total) -> int {
+        if (s.empty()) return 0;
+        int raw = std::stoi(s);
+        if (raw < 0) raw = total + raw + 1;
+        return (raw >= 1 && raw <= total) ? raw : 0;
+    };
+    if (p1 == std::string::npos) {
+        fv.v = resolveIdx(tok, nV);
+        return fv;
+    }
+    fv.v = resolveIdx(tok.substr(0, p1), nV);
+    size_t p2 = tok.find('/', p1 + 1);
+    if (p2 == std::string::npos) {
+        fv.vt = resolveIdx(tok.substr(p1 + 1), nVt);
+    } else {
+        fv.vt = resolveIdx(tok.substr(p1 + 1, p2 - p1 - 1), nVt);
+        fv.vn = resolveIdx(tok.substr(p2 + 1), nVn);
+    }
+    return fv;
+}
+
+static bool filterObjShardsAndRotateYUp(
+    const fs::path& srcObj,
+    const fs::path& dstObj,
+    size_t& keptFacesOut,
+    size_t& totalFacesOut
+) {
+    keptFacesOut = 0;
+    totalFacesOut = 0;
+    std::ifstream in(srcObj);
+    if (!in.is_open()) return false;
+
+    std::vector<std::string> mtllibLines;
+    std::vector<std::array<double, 3>> verts;
+    std::vector<std::string> vts;
+    std::vector<std::array<double, 3>> vns;
+    struct FaceRec {
+        std::string mat;
+        std::vector<ObjFaceVert> pts;
+    };
+    std::vector<FaceRec> faces;
+    std::string curMat;
+    std::string line;
+
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream iss(line);
+        std::string tag;
+        if (!(iss >> tag)) continue;
+        if (tag == "v") {
+            double x = 0, y = 0, z = 0;
+            if (iss >> x >> y >> z) verts.push_back({ x, y, z });
+        } else if (tag == "vt") {
+            std::string rest;
+            std::getline(iss, rest);
+            vts.push_back(rest);
+        } else if (tag == "vn") {
+            double x = 0, y = 0, z = 0;
+            if (iss >> x >> y >> z) vns.push_back({ x, y, z });
+        } else if (tag == "mtllib") {
+            mtllibLines.push_back(line);
+        } else if (tag == "usemtl") {
+            std::getline(iss, curMat);
+            size_t a = curMat.find_first_not_of(" \t");
+            curMat = (a == std::string::npos) ? "" : curMat.substr(a);
+        } else if (tag == "f") {
+            FaceRec fr;
+            fr.mat = curMat;
+            std::string tok;
+            while (iss >> tok) {
+                ObjFaceVert fv = parseObjFaceTok(tok, static_cast<int>(verts.size()), static_cast<int>(vts.size()), static_cast<int>(vns.size()));
+                if (fv.v > 0) fr.pts.push_back(fv);
+            }
+            if (fr.pts.size() >= 3) faces.push_back(std::move(fr));
+        }
+    }
+    in.close();
+
+    if (verts.empty() || faces.empty()) return false;
+    totalFacesOut = faces.size();
+
+    // Disjoint-set union across shared vertices of each face
+    std::vector<int> parent(verts.size());
+    std::iota(parent.begin(), parent.end(), 0);
+    auto findRoot = [&](int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    auto unite = [&](int a, int b) {
+        a = findRoot(a);
+        b = findRoot(b);
+        if (a != b) parent[b] = a;
+    };
+
+    for (const auto& f : faces) {
+        int r0 = f.pts[0].v - 1;
+        for (size_t i = 1; i < f.pts.size(); ++i) unite(r0, f.pts[i].v - 1);
+    }
+
+    std::unordered_map<int, size_t> compFaceCount;
+    for (const auto& f : faces) compFaceCount[findRoot(f.pts[0].v - 1)]++;
+
+    int dominantRoot = -1;
+    size_t maxCompFaces = 0;
+    for (const auto& kv : compFaceCount) {
+        if (kv.second > maxCompFaces) { maxCompFaces = kv.second; dominantRoot = kv.first; }
+    }
+    if (dominantRoot < 0 || maxCompFaces == 0) return false;
+
+    // Keep dominant component + secondary real structures (>=2% of mesh & >=150 faces); drop all small black shards
+    size_t secondaryThreshold = std::max<size_t>(150, totalFacesOut / 50);
+    std::vector<int> vRemap(verts.size(), 0);
+    std::vector<int> vtRemap(vts.size(), 0);
+    std::vector<int> vnRemap(vns.size(), 0);
+    std::vector<std::array<double, 3>> outV;
+    std::vector<std::string> outVt;
+    std::vector<std::array<double, 3>> outVn;
+    std::vector<FaceRec> keptFaces;
+    keptFaces.reserve(faces.size());
+
+    for (const auto& f : faces) {
+        int r = findRoot(f.pts[0].v - 1);
+        size_t sz = compFaceCount[r];
+        if (r != dominantRoot && sz < secondaryThreshold) continue;
+
+        FaceRec nf;
+        nf.mat = f.mat;
+        for (const auto& p : f.pts) {
+            ObjFaceVert np;
+            int vi = p.v - 1;
+            if (vRemap[vi] == 0) {
+                outV.push_back(verts[vi]);
+                vRemap[vi] = static_cast<int>(outV.size());
+            }
+            np.v = vRemap[vi];
+
+            if (p.vt > 0) {
+                int vti = p.vt - 1;
+                if (vtRemap[vti] == 0) {
+                    outVt.push_back(vts[vti]);
+                    vtRemap[vti] = static_cast<int>(outVt.size());
+                }
+                np.vt = vtRemap[vti];
+            }
+            if (p.vn > 0) {
+                int vni = p.vn - 1;
+                if (vnRemap[vni] == 0) {
+                    outVn.push_back(vns[vni]);
+                    vnRemap[vni] = static_cast<int>(outVn.size());
+                }
+                np.vn = vnRemap[vni];
+            }
+            nf.pts.push_back(np);
+        }
+        keptFaces.push_back(std::move(nf));
+    }
+
+    if (keptFaces.empty()) return false;
+    keptFacesOut = keptFaces.size();
+
+    std::ofstream out(dstObj, std::ios::trunc);
+    if (!out.is_open()) return false;
+    out << "# RathoreScan 3D Studio - +Y-up clean mesh export\n";
+    for (const auto& ml : mtllibLines) out << ml << "\n";
+    // Rotate +Y-down (COLMAP/OpenMVS) -> +Y-up (Three.js/Unity/UE5)
+    for (const auto& p : outV) out << "v " << p[0] << " " << -p[1] << " " << -p[2] << "\n";
+    for (const auto& s : outVt) out << "vt" << s << "\n";
+    for (const auto& n : outVn) out << "vn " << n[0] << " " << -n[1] << " " << -n[2] << "\n";
+
+    std::string activeMat;
+    for (const auto& f : keptFaces) {
+        if (!f.mat.empty() && f.mat != activeMat) {
+            activeMat = f.mat;
+            out << "usemtl " << activeMat << "\n";
+        }
+        out << "f";
+        for (const auto& p : f.pts) {
+            out << " " << p.v;
+            if (p.vt > 0 || p.vn > 0) {
+                out << "/" << (p.vt > 0 ? std::to_string(p.vt) : "");
+                if (p.vn > 0) out << "/" << p.vn;
+            }
+        }
+        out << "\n";
+    }
+    out.close();
+    return fs::exists(dstObj) && fs::file_size(dstObj) > 128;
+}
+
 int main(int argc, char* argv[]) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 5) {
-        std::cerr << "Usage: scan3d_engine <job_dir> <mode:video|photos|hybrid> <video_path|none> <preset:lowpoly|balanced|highpoly|ultra> [fps] [scene_mode:auto|subject|tree|full]\n";
+        logError("Usage: scan3d_engine <job_dir> <mode:video|photos|hybrid> <video_path|none> <preset:lowpoly|balanced|highpoly|ultra> [fps] [scene_mode:auto|subject|tree|full]");
         return 1;
     }
 
@@ -1650,7 +2195,7 @@ int main(int argc, char* argv[]) {
         return true;
     };
 
-    auto runSfmPass = [&](bool useMask) -> int {
+    auto runSfmPass = [&](bool useMask, int sfmMaxDim) -> int {
         std::error_code ec;
         fs::remove(dbPath, ec);
         fs::remove_all(sparseDir, ec);
@@ -1664,17 +2209,17 @@ int main(int argc, char* argv[]) {
             if (prepareSubjectMasks()) maskFlag = " --ImageReader.mask_path \"" + masksDir.string() + "\"";
         }
 
-        logProgress(25, std::string("Running COLMAP GPU SIFT on ") + std::to_string(totalImages) +
+        logProgress(25, std::string("Running COLMAP GPU SIFT at ") + std::to_string(sfmMaxDim) + "px on " + std::to_string(totalImages) +
             (useMask ? " masked views..." : " views..."));
         std::string featCmd = colmapCall + " feature_extractor"
             " --database_path \"" + dbPath.string() + "\""
             " --image_path \"" + imgDir.string() + "\"" + maskFlag +
             " --ImageReader.single_camera " + singleCam +
             " --FeatureExtraction.use_gpu 1"
-            " --FeatureExtraction.max_image_size " + std::to_string(maxImgSize) +
+            " --FeatureExtraction.max_image_size " + std::to_string(sfmMaxDim) +
             " --SiftExtraction.max_num_features " + maxFeats +
             " --SiftExtraction.domain_size_pooling 1";
-        if (preset == "highpoly" || preset == "ultra") featCmd += " --SiftExtraction.estimate_affine_shape 1";
+        if (sfmMaxDim >= 1600 && (preset == "highpoly" || preset == "ultra")) featCmd += " --SiftExtraction.estimate_affine_shape 1";
         if (runCmd(featCmd) != 0) return -1;
 
         std::string matchCmd;
@@ -1717,13 +2262,13 @@ int main(int argc, char* argv[]) {
             " --input_path \"" + bestSparse.string() + "\""
             " --output_path \"" + alignedSparse.string() + "\""
             " --method MANHATTAN-WORLD"
-            " --max_image_size " + std::to_string(std::min(maxImgSize, 1024));
+            " --max_image_size " + std::to_string(std::min(sfmMaxDim, 1024));
         if (runCmd(alignCmd) == 0 && fs::exists(alignedSparse / "images.bin")) {
             bestSparse = alignedSparse;
         }
 
         logProgress(62, "Undistorting camera frames from aligned model (" + bestSparse.filename().string() + ")...");
-        std::string undistCmd = colmapCall + " image_undistorter --image_path \"" + imgDir.string() + "\" --input_path \"" + bestSparse.string() + "\" --output_path \"" + denseDir.string() + "\" --output_type COLMAP --max_image_size " + std::to_string(maxImgSize);
+        std::string undistCmd = colmapCall + " image_undistorter --image_path \"" + imgDir.string() + "\" --input_path \"" + bestSparse.string() + "\" --output_path \"" + denseDir.string() + "\" --output_type COLMAP --max_image_size " + std::to_string(sfmMaxDim);
         if (runCmd(undistCmd) != 0) return -1;
 
         int regCount = 0;
@@ -1735,26 +2280,48 @@ int main(int argc, char* argv[]) {
         return regCount;
     };
 
+    // GPU-safe resolution ladder: step down only on CUDA/tool failure (<0), never discard valid low-count diagnostics
+    int usedSfmDim = maxImgSize;
+    auto runSfmWithGpuLadder = [&](bool useMask) -> int {
+        std::vector<int> ladder = { maxImgSize, 1600, 1280, 960 };
+        std::vector<int> dims;
+        for (int d : ladder) {
+            if (d <= maxImgSize && (dims.empty() || dims.back() != d)) dims.push_back(d);
+        }
+        int lastRes = -1;
+        for (size_t i = 0; i < dims.size(); ++i) {
+            if (i > 0) {
+                logProgress(24, "GPU VRAM fallback: stepping COLMAP resolution down to " + std::to_string(dims[i]) + "px...");
+            }
+            lastRes = runSfmPass(useMask, dims[i]);
+            if (lastRes >= 0) {
+                usedSfmDim = dims[i];
+                return lastRes;
+            }
+        }
+        return lastRes;
+    };
+
     int regViews = 0;
     if (uniqueCount == 2) {
-        regViews = runSfmPass(false);
+        regViews = runSfmWithGpuLadder(false);
         if (regViews < 2) {
             logProgress(25, "2 wide-angle/distinct photos detected — activating Dual-View AI Deep-Scan 3D Reconstruction...");
             if (!reconstructDeepScan(cfg, jobDir, uniqueViews[0], uniqueViews[1], preset, sceneMode)) return 12;
             return 0;
         }
     } else {
-        if (sceneMode == "subject" || sceneMode == "tree") regViews = runSfmPass(true);
-        else if (sceneMode == "full") regViews = runSfmPass(false);
+        if (sceneMode == "subject" || sceneMode == "tree") regViews = runSfmWithGpuLadder(true);
+        else if (sceneMode == "full") regViews = runSfmWithGpuLadder(false);
         else {
             // Smart Auto: use AI semantic mask first when SegFormer detected an isolated subject/character/architecture/tree
             bool preferMask = aiInfo.valid && (aiInfo.archetype != "environment");
-            regViews = runSfmPass(preferMask);
+            regViews = runSfmWithGpuLadder(preferMask);
             if (regViews < std::min(5, totalImages)) {
                 logProgress(22, "Only " + std::to_string(std::max(0, regViews)) + " views matched — retrying with alternate mask strategy...");
-                int altViews = runSfmPass(!preferMask);
+                int altViews = runSfmWithGpuLadder(!preferMask);
                 if (altViews > regViews) regViews = altViews;
-                else if (regViews > 0) regViews = runSfmPass(preferMask);
+                else if (regViews > 0) regViews = runSfmWithGpuLadder(preferMask);
             }
         }
     }
@@ -1845,7 +2412,32 @@ int main(int argc, char* argv[]) {
         }
     }
     cleanTempDmaps(jobDir);
-    if (!densifyOk) { std::cerr << "[ERROR] OpenMVS DensifyPointCloud failed across all memory tiers.\n"; return 9; }
+    if (!densifyOk) { logError("OpenMVS DensifyPointCloud failed across all memory tiers."); return 9; }
+
+    // Statistical Outlier Removal (SOR): strip sparse floating noise points before meshing
+    {
+        fs::path densePly = jobDir / "scene_dense.ply";
+        fs::path cleanPly = jobDir / "scene_dense_clean.ply";
+        size_t totalPts = 0, keptPts = 0;
+        logProgress(87, "Filtering dense point cloud outliers (SOR noise removal)...");
+        if (statisticalOutlierRemovalPly(densePly, cleanPly, 12, 1.2, totalPts, keptPts)) {
+            std::error_code sorEc;
+            fs::remove(densePly, sorEc);
+            fs::rename(cleanPly, densePly, sorEc);
+            if (sorEc) {
+                fs::copy_file(cleanPly, densePly, fs::copy_options::overwrite_existing, sorEc);
+                fs::remove(cleanPly, sorEc);
+            }
+            size_t droppedPts = (totalPts >= keptPts) ? (totalPts - keptPts) : 0;
+            double pct = (totalPts > 0) ? (100.0 * static_cast<double>(droppedPts) / static_cast<double>(totalPts)) : 0.0;
+            char sorMsg[160];
+            std::snprintf(sorMsg, sizeof(sorMsg), "[AI-HOW] Point-cloud SOR removed %zu/%zu sparse noise points (%.1f%%).", droppedPts, totalPts, pct);
+            logProgress(88, sorMsg);
+        } else {
+            std::error_code sorEc;
+            fs::remove(cleanPly, sorEc);
+        }
+    }
 
     logProgress(90, "Building Clean 3D Polygon Mesh (Preset: " + preset + ")...");
     std::string meshCmd = mvsExe(cfg, "ReconstructMesh") + " scene_dense.mvs -o scene_mesh.mvs --decimate " + decimateFactor +
@@ -1896,7 +2488,7 @@ int main(int argc, char* argv[]) {
         logProgress(97, "Retrying TextureMesh at memory-safe UV resolution...");
         texExit = runCmd(makeTexCmd(texResLevel + 1), jobDir.string());
     }
-    if (texExit != 0) { std::cerr << "[ERROR] OpenMVS TextureMesh failed.\n"; return 11; }
+    if (texExit != 0) { logError("OpenMVS TextureMesh failed."); return 11; }
 
     fs::path finalMtl = outDir / "model.mtl";
     if (fs::exists(finalMtl)) {
@@ -1912,34 +2504,50 @@ int main(int argc, char* argv[]) {
         mtlOut << mtlBuf.str();
     }
 
-    // Convert COLMAP/OpenMVS +Y-down coordinates to +Y-up (rotate 180 deg around X) so Three.js, Unity, & UE5 load upright
+    // Connected-component floating shard cleanup + +Y-up orientation (COLMAP/OpenMVS +Y-down -> Three.js/Unity/UE5 +Y-up)
     if (fs::exists(finalObj)) {
-        fs::path tmpObj = outDir / "model_yup.obj";
-        std::ifstream objIn(finalObj);
-        std::ofstream objOut(tmpObj, std::ios::trunc);
-        std::string line;
-        while (std::getline(objIn, line)) {
-            if (line.rfind("v ", 0) == 0 || line.rfind("vn ", 0) == 0) {
-                std::istringstream iss(line);
-                std::string tag;
-                double x = 0, y = 0, z = 0;
-                if (iss >> tag >> x >> y >> z) {
-                    objOut << tag << " " << x << " " << -y << " " << -z;
-                    std::string rest;
-                    if (std::getline(iss, rest)) objOut << rest;
-                    objOut << "\n";
-                    continue;
-                }
+        logProgress(98, "Removing disconnected floating shards & orienting +Y-up...");
+        fs::path tmpObj = outDir / "model_clean_yup.obj";
+        size_t keptFaces = 0, totalFaces = 0;
+        if (filterObjShardsAndRotateYUp(finalObj, tmpObj, keptFaces, totalFaces)) {
+            std::error_code ec;
+            fs::rename(tmpObj, finalObj, ec);
+            if (ec) {
+                fs::copy_file(tmpObj, finalObj, fs::copy_options::overwrite_existing, ec);
+                fs::remove(tmpObj, ec);
             }
-            objOut << line << "\n";
-        }
-        objIn.close();
-        objOut.close();
-        std::error_code ec;
-        fs::rename(tmpObj, finalObj, ec);
-        if (ec) {
-            fs::copy_file(tmpObj, finalObj, fs::copy_options::overwrite_existing, ec);
-            fs::remove(tmpObj, ec);
+            size_t dropped = (totalFaces >= keptFaces) ? (totalFaces - keptFaces) : 0;
+            char shardMsg[180];
+            std::snprintf(shardMsg, sizeof(shardMsg), "[AI-HOW] Clean mesh: kept %zu/%zu triangles (dropped %zu disconnected fragments).", keptFaces, totalFaces, dropped);
+            logProgress(99, shardMsg);
+        } else {
+            fs::path fallbackObj = outDir / "model_yup.obj";
+            std::ifstream objIn(finalObj);
+            std::ofstream objOut(fallbackObj, std::ios::trunc);
+            std::string line;
+            while (std::getline(objIn, line)) {
+                if (line.rfind("v ", 0) == 0 || line.rfind("vn ", 0) == 0) {
+                    std::istringstream iss(line);
+                    std::string tag;
+                    double x = 0, y = 0, z = 0;
+                    if (iss >> tag >> x >> y >> z) {
+                        objOut << tag << " " << x << " " << -y << " " << -z;
+                        std::string rest;
+                        if (std::getline(iss, rest)) objOut << rest;
+                        objOut << "\n";
+                        continue;
+                    }
+                }
+                objOut << line << "\n";
+            }
+            objIn.close();
+            objOut.close();
+            std::error_code ec;
+            fs::rename(fallbackObj, finalObj, ec);
+            if (ec) {
+                fs::copy_file(fallbackObj, finalObj, fs::copy_options::overwrite_existing, ec);
+                fs::remove(fallbackObj, ec);
+            }
         }
     }
 
@@ -1947,7 +2555,7 @@ int main(int argc, char* argv[]) {
         outDir / "scene_report.json",
         aiInfo,
         whyCoverage,
-        "SegFormer Semantic Mask + COLMAP CUDA (" + std::to_string(regViews) + "/" + std::to_string(totalImages) + " views) + OpenMVS (" + preset + ")",
+        "SegFormer Semantic Mask + COLMAP CUDA (" + std::to_string(usedSfmDim) + "px, " + std::to_string(regViews) + "/" + std::to_string(totalImages) + " views) + SOR + OpenMVS Shard-Clean (" + preset + ")",
         orbitDeg,
         regViews,
         totalImages
