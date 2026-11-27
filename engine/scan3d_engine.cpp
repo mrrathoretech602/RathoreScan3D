@@ -1793,6 +1793,7 @@ int main(int argc, char* argv[]) {
     struct DensifyProfile {
         int resLevel;
         int maxRes;
+        int minRes;
         int numViews;
         int fusionFilter;
         int maxThreads;
@@ -1801,18 +1802,18 @@ int main(int argc, char* argv[]) {
     std::vector<DensifyProfile> densifyTiers;
     if (regViews >= 50) {
         int safeRes = std::max(mvsResLevel, 2);
-        int safeMax = std::min(maxImgSize, 1280);
-        densifyTiers.push_back({ safeRes, safeMax, std::min(4, regViews), 1, 4, "Large-scene memory-safe mode (" + std::to_string(regViews) + " views)" });
-        densifyTiers.push_back({ 3, 960, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, 960px, 2 threads)" });
-        densifyTiers.push_back({ 3, 768, std::min(3, regViews), 0, 2, "Ultra-safe merge retry (level 3, 768px)" });
+        int safeMax = std::min(maxImgSize, 960);
+        densifyTiers.push_back({ safeRes, safeMax, 320, std::min(4, regViews), 1, 4, "Large-scene fast memory-safe mode (" + std::to_string(regViews) + " views)" });
+        densifyTiers.push_back({ 3, 720, 320, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, max 720px, 2 threads)" });
+        densifyTiers.push_back({ 3, 560, 256, std::min(3, regViews), 0, 2, "Ultra-safe merge retry (level 3, max 560px)" });
     } else if (regViews >= 24) {
-        densifyTiers.push_back({ mvsResLevel, maxImgSize, std::min(4, regViews), (mvsResLevel <= 1 ? 1 : 2), 4, "Medium-scene balanced mode" });
-        densifyTiers.push_back({ std::max(mvsResLevel + 1, 2), std::min(maxImgSize, 1280), std::min(4, regViews), 1, 4, "Memory-safe retry (level 2, 1280px)" });
-        densifyTiers.push_back({ 3, 960, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, 960px)" });
+        densifyTiers.push_back({ mvsResLevel, maxImgSize, 480, std::min(4, regViews), (mvsResLevel <= 1 ? 1 : 2), 4, "Medium-scene balanced mode" });
+        densifyTiers.push_back({ std::max(mvsResLevel + 1, 2), std::min(maxImgSize, 960), 320, std::min(4, regViews), 1, 4, "Memory-safe retry (level 2, max 960px)" });
+        densifyTiers.push_back({ 3, 720, 320, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, max 720px)" });
     } else {
-        densifyTiers.push_back({ mvsResLevel, maxImgSize, std::min(5, regViews), 2, 0, "Preset full quality" });
-        densifyTiers.push_back({ std::max(mvsResLevel + 1, 2), std::min(maxImgSize, 1280), std::min(4, regViews), 1, 4, "Memory-safe retry (level 2, 1280px)" });
-        densifyTiers.push_back({ 3, 960, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, 960px)" });
+        densifyTiers.push_back({ mvsResLevel, maxImgSize, 480, std::min(5, regViews), 2, 0, "Preset full quality" });
+        densifyTiers.push_back({ std::max(mvsResLevel + 1, 2), std::min(maxImgSize, 960), 320, std::min(4, regViews), 1, 4, "Memory-safe retry (level 2, max 960px)" });
+        densifyTiers.push_back({ 3, 720, 320, std::min(3, regViews), 1, 2, "Low-RAM retry (level 3, max 720px)" });
     }
 
     bool densifyOk = false;
@@ -1828,6 +1829,7 @@ int main(int argc, char* argv[]) {
         std::string densifyCmd = mvsExe(cfg, "DensifyPointCloud") +
             " scene.mvs --resolution-level " + std::to_string(dp.resLevel) +
             " --max-resolution " + std::to_string(dp.maxRes) +
+            " --min-resolution " + std::to_string(dp.minRes) +
             " --number-views " + std::to_string(std::max(2, dp.numViews)) +
             " --fusion-filter " + std::to_string(dp.fusionFilter) +
             " --remove-dmaps 1";
